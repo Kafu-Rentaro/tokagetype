@@ -5,9 +5,11 @@ import type { ButtonNode, Node, RectNode, TextNode, View3DNode } from '../model/
 import { createNode } from '../model/factory';
 import { addNodeToFrame } from '../model/mutate';
 import { useEditorStore } from '../store/editorStore';
+import { useUiStore } from '../store/uiStore';
 import { useAssetUrl } from '../three/assetUrls';
 import View3DCanvas from '../three/View3DCanvas';
 import { addAssetFromFile, assignAssetToNode } from '../lib/assets';
+import { miniBtn, miniBtnActive } from '../ui/theme';
 
 function View3DOverlay({ node, scale }: { node: View3DNode; scale: number }) {
   const orbitNodeId = useEditorStore((s) => s.orbitNodeId);
@@ -24,8 +26,8 @@ function View3DOverlay({ node, scale }: { node: View3DNode; scale: number }) {
         width: node.width * scale,
         height: node.height * scale,
         pointerEvents: orbiting ? 'auto' : 'none',
-        outline: orbiting ? '2px solid #2f6fd0' : undefined,
-        background: '#e8eef7',
+        outline: orbiting ? '2px solid var(--accent)' : undefined,
+        background: '#dde1e6',
         overflow: 'hidden',
       }}
     >
@@ -39,7 +41,7 @@ function View3DOverlay({ node, scale }: { node: View3DNode; scale: number }) {
       {!node.assetId && (
         <div style={{
           position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#5a6c85', fontSize: 13, pointerEvents: 'none', textAlign: 'center', padding: 8,
+          color: '#5a5e66', fontSize: 13, pointerEvents: 'none', textAlign: 'center', padding: 8,
         }}>
           GLB 未設定<br />（ファイルを選択 / ドロップ）
         </div>
@@ -48,6 +50,8 @@ function View3DOverlay({ node, scale }: { node: View3DNode; scale: number }) {
   );
 }
 
+const clampScale = (v: number) => Math.min(3, Math.max(0.15, v));
+
 export default function KonvaCanvas() {
   const doc = useEditorStore((s) => s.doc);
   const frame = useEditorStore((s) => s.currentFrame());
@@ -55,6 +59,8 @@ export default function KonvaCanvas() {
   const selectNode = useEditorStore((s) => s.selectNode);
   const patchNode = useEditorStore((s) => s.patchNode);
   const commit = useEditorStore((s) => s.commit);
+  const uiMode = useUiStore((s) => s.uiMode);
+  const mobile = uiMode === 'mobile';
 
   const [scale, setScale] = useState(0.85);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -63,6 +69,8 @@ export default function KonvaCanvas() {
   const transformerRef = useRef<Konva.Transformer>(null);
   const nodeRefs = useRef(new Map<string, Konva.Node>());
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pinchRef = useRef<{ dist: number; scale: number } | null>(null);
 
   useEffect(() => {
     const tr = transformerRef.current;
@@ -71,6 +79,59 @@ export default function KonvaCanvas() {
     tr.nodes(target ? [target] : []);
     tr.getLayer()?.batchDraw();
   }, [selectedNodeId, frame?.nodes]);
+
+  // スマホ UI: フレーム幅が画面に収まるよう初期ズームをフィットさせる
+  useEffect(() => {
+    if (!mobile || !frame) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const fit = () => {
+      const w = el.clientWidth - 24;
+      if (w > 0) setScale(clampScale(Math.min(1, w / frame.width)));
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // フレーム切替時のみ再フィット（手動ズームを毎回潰さない）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mobile, frame?.id]);
+
+  // ピンチズーム（2本指）。Konva のタッチドラッグと競合しないよう、
+  // 2本指のときだけ介入し、スクロールを止める。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const dist = (t: TouchList) =>
+      Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        pinchRef.current = { dist: dist(e.touches), scale };
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && pinchRef.current) {
+        e.preventDefault();
+        const d = dist(e.touches);
+        if (pinchRef.current.dist > 0) {
+          setScale(clampScale(pinchRef.current.scale * (d / pinchRef.current.dist)));
+        }
+      }
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) pinchRef.current = null;
+    };
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd);
+    el.addEventListener('touchcancel', onEnd);
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', onEnd);
+    };
+  }, [scale]);
 
   if (!doc || !frame) return <div style={{ padding: 24 }}>読み込み中…</div>;
 
@@ -175,12 +236,12 @@ export default function KonvaCanvas() {
             <Rect
               width={n.width}
               height={n.height}
-              fill="#dfe8f5"
-              stroke="#8ea6c8"
+              fill="#dde1e6"
+              stroke="#9b9ca4"
               strokeWidth={1}
               dash={[6, 4]}
             />
-            <Text x={8} y={8} text="3D" fontSize={12} fill="#5a6c85" />
+            <Text x={8} y={8} text="3D" fontSize={12} fill="#5a5e66" />
           </Group>
         );
       }
@@ -219,25 +280,38 @@ export default function KonvaCanvas() {
     }
   };
 
+  const fitToWidth = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const w = el.clientWidth - (mobile ? 24 : 48);
+    if (w > 0) setScale(clampScale(w / frame.width));
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={zoomBarStyle}>
-        <span>ズーム</span>
+        <span style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>ズーム</span>
         {[0.5, 0.75, 0.85, 1, 1.25, 1.5].map((z) => (
           <button
             key={z}
             onClick={() => setScale(z)}
-            style={{ ...zoomBtnStyle, ...(scale === z ? zoomBtnActiveStyle : {}) }}
+            style={{ ...miniBtn, ...(scale === z ? miniBtnActive : {}) }}
           >
-            {Math.round(z * 100)}%
+            <span className="num">{Math.round(z * 100)}%</span>
           </button>
         ))}
-        <span style={{ marginLeft: 12, color: '#5a6c85' }}>
-          {frame.name}（{frame.width}×{frame.height}）
+        <button onClick={fitToWidth} style={miniBtn}>幅に合わせる</button>
+        <span style={{ marginLeft: 12, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+          {frame.name}（<span className="num">{frame.width}×{frame.height}</span>）
+        </span>
+        <span className="num" style={{ marginLeft: 'auto', color: 'var(--text-faint)' }}>
+          {Math.round(scale * 100)}%
         </span>
       </div>
       <div
-        style={{ flex: 1, overflow: 'auto', padding: 24, background: '#2a3140' }}
+        ref={scrollRef}
+        className="dotgrid-bg"
+        style={{ flex: 1, overflow: 'auto', padding: mobile ? 12 : 24 }}
         onClick={(e) => {
           if (e.target === e.currentTarget) selectNode(null);
         }}
@@ -255,8 +329,8 @@ export default function KonvaCanvas() {
             width: frame.width * scale,
             height: frame.height * scale,
             margin: '0 auto',
-            boxShadow: '0 4px 24px rgba(0,0,0,0.45)',
-            outline: dragOver ? '3px dashed #2f6fd0' : undefined,
+            border: '1px solid var(--line-strong)',
+            outline: dragOver ? '2px dashed var(--accent)' : undefined,
             background: frame.background,
           }}
         >
@@ -273,6 +347,8 @@ export default function KonvaCanvas() {
                 ref={transformerRef}
                 rotateEnabled
                 keepRatio={false}
+                anchorStroke="#ff4d1c"
+                borderStroke="#ff4d1c"
                 boundBoxFunc={(oldBox, newBox) => (newBox.width < 10 || newBox.height < 10 ? oldBox : newBox)}
               />
             </Layer>
@@ -308,8 +384,8 @@ export default function KonvaCanvas() {
                 height: Math.max(40, editingTextNode.height * scale),
                 fontSize: editingTextNode.fontSize * scale,
                 color: editingTextNode.fill,
-                background: 'rgba(255,255,255,0.92)',
-                border: '2px solid #2f6fd0',
+                background: 'rgba(255,255,255,0.95)',
+                border: '2px solid var(--accent)',
                 borderRadius: 4,
                 zIndex: 20,
                 resize: 'both',
@@ -319,9 +395,11 @@ export default function KonvaCanvas() {
             />
           )}
         </div>
-        <p style={{ color: '#8ea0bb', fontSize: 12, textAlign: 'center', marginTop: 12 }}>
-          GLB ファイルをキャンバスへドラッグ&ドロップすると 3D ビューに割り当てられます
-        </p>
+        {!mobile && (
+          <p style={{ color: 'var(--text-faint)', fontSize: 12, textAlign: 'center', marginTop: 12 }}>
+            GLB ファイルをキャンバスへドラッグ&ドロップすると 3D ビューに割り当てられます
+          </p>
+        )}
       </div>
     </div>
   );
@@ -329,10 +407,6 @@ export default function KonvaCanvas() {
 
 const zoomBarStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px',
-  background: '#1d2534', color: '#c7d3e6', fontSize: 12,
+  background: 'var(--panel)', color: 'var(--text-dim)', fontSize: 12,
+  borderBottom: '1px solid var(--line)', overflowX: 'auto',
 };
-const zoomBtnStyle: React.CSSProperties = {
-  background: '#2a3850', color: '#c7d3e6', border: '1px solid #3a4f7a',
-  borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 12,
-};
-const zoomBtnActiveStyle: React.CSSProperties = { background: '#2f6fd0', color: '#fff' };

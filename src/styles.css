@@ -1,3 +1,28 @@
+/* デザイン基盤: 「製図台」— docs/SPEC.md「デザイン方針」参照
+   無彩色チャコール + アクセント1色（バーミリオン）、ヘアライン罫線、
+   数値は等幅フォント、角丸は小さく、影は使わない。 */
+:root {
+  --bg: #16171a;
+  --panel: #1e1f23;
+  --panel-2: #26272c;
+  --inset: #101114;
+  --line: #34353b;
+  --line-strong: #494a52;
+  --text: #ececee;
+  --text-dim: #9b9ca4;
+  --text-faint: #6d6e76;
+  --accent: #ff4d1c;
+  --accent-hover: #ff6136;
+  --accent-ink: #ffffff;
+  --ok: #57ab5a;
+  --warn: #e8a33d;
+  --danger: #e5484d;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --radius: 4px;
+  /* 方眼（ドットグリッド）: キャンバス周囲の地 */
+  --dotgrid: radial-gradient(circle, #2e2f36 1px, transparent 1.2px);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -13,12 +38,17 @@ body,
 body {
   font-family: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP',
     -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #141c2c;
-  color: #e6eefb;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font-family: inherit;
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -27,9 +57,22 @@ button:disabled {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #3a4f7a;
-  border-radius: 5px;
+  background: var(--line-strong);
+  border-radius: 0;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* 数値・寸法表示 */
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* キャンバス周囲のドットグリッド地 */
+.dotgrid-bg {
+  background-color: var(--inset);
+  background-image: var(--dotgrid);
+  background-size: 24px 24px;
 }

@@ -3,16 +3,64 @@ import KonvaCanvas from './components/KonvaCanvas';
 import Panels from './components/Panels';
 import PlayView from './components/PlayView';
 import PropertyPanel from './components/PropertyPanel';
-import Toolbar from './components/Toolbar';
+import Toolbar, { MobileToolBar } from './components/Toolbar';
 import SculptView from './sculpt/SculptView';
 import { removeNodeFromFrame } from './model/mutate';
 import { buildSampleProject } from './sample';
 import { listProjects, loadProject, saveAssetBlob, saveProject } from './storage/db';
 import { useEditorStore } from './store/editorStore';
+import { useUiStore } from './store/uiStore';
+import { IconX } from './ui/icons';
 import type { View3DNode } from './model/types';
 
 const LAST_PROJECT_KEY = 'tokagetype:lastProjectId';
 let bootstrapStarted = false;
+
+/** スマホ UI 用ボトムシート（パネルを下から引き出す） */
+function BottomSheet({ title, onClose, children }: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 60 }}
+      />
+      <div
+        style={{
+          position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 61,
+          maxHeight: '72vh', display: 'flex', flexDirection: 'column',
+          background: 'var(--panel)', borderTop: '1px solid var(--line-strong)',
+          borderRadius: '12px 12px 0 0', paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '10px 14px', borderBottom: '1px solid var(--line)', flexShrink: 0,
+          }}
+        >
+          <span style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--line-strong)', position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: 5 }} />
+          <strong style={{ fontSize: 13, letterSpacing: '0.06em' }}>{title}</strong>
+          <button
+            onClick={onClose}
+            aria-label="閉じる"
+            style={{
+              marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 36, height: 36, background: 'transparent', border: 'none',
+              color: 'var(--text-dim)', cursor: 'pointer',
+            }}
+          >
+            <IconX size={18} />
+          </button>
+        </div>
+        <div style={{ overflowY: 'auto', minHeight: 0 }}>{children}</div>
+      </div>
+    </>
+  );
+}
 
 export default function App() {
   const doc = useEditorStore((s) => s.doc);
@@ -20,8 +68,25 @@ export default function App() {
   const loadDoc = useEditorStore((s) => s.loadDoc);
   const sculptNodeId = useEditorStore((s) => s.sculptNodeId);
   const setSculptNode = useEditorStore((s) => s.setSculptNode);
+  const uiMode = useUiStore((s) => s.uiMode);
+  const sheet = useUiStore((s) => s.sheet);
+  const setSheet = useUiStore((s) => s.setSheet);
+  const syncAuto = useUiStore((s) => s.syncAuto);
   const [ready, setReady] = useState(false);
   const saveTimer = useRef<number | null>(null);
+  const mobile = uiMode === 'mobile';
+
+  // 画面幅の変化に追随（手動選択がある場合は syncAuto が何もしない）
+  useEffect(() => {
+    const onResize = () => syncAuto();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [syncAuto]);
+
+  // モードが変わったらシートを閉じる
+  useEffect(() => {
+    setSheet(null);
+  }, [mode, setSheet]);
 
   // 初回起動: 保存済みプロジェクトがあれば開き、無ければサンプルを用意する
   useEffect(() => {
@@ -113,23 +178,46 @@ export default function App() {
 
   if (!ready) {
     return (
-      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#141c2c', color: '#dbe6f5' }}>
+      <div style={{ height: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', color: 'var(--text)' }}>
         tokagetype を読み込み中…
       </div>
     );
   }
 
+  const sheetPanelStyle: React.CSSProperties = {
+    width: '100%', border: 'none', maxHeight: 'none',
+  };
+
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#141c2c' }}>
+    <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
       <Toolbar />
       {mode === 'edit' ? (
-        <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-          <Panels />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <KonvaCanvas />
+        mobile ? (
+          <>
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <KonvaCanvas />
+            </div>
+            <MobileToolBar />
+            {sheet === 'left' && (
+              <BottomSheet title="フレーム / レイヤー" onClose={() => setSheet(null)}>
+                <Panels style={sheetPanelStyle} />
+              </BottomSheet>
+            )}
+            {sheet === 'right' && (
+              <BottomSheet title="プロパティ" onClose={() => setSheet(null)}>
+                <PropertyPanel style={sheetPanelStyle} />
+              </BottomSheet>
+            )}
+          </>
+        ) : (
+          <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+            <Panels />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <KonvaCanvas />
+            </div>
+            <PropertyPanel />
           </div>
-          <PropertyPanel />
-        </div>
+        )
       ) : (
         <PlayView />
       )}

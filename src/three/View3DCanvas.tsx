@@ -114,7 +114,7 @@ function PlaceholderModel() {
     <group position={[0, 0.8, 0]}>
       <mesh>
         <boxGeometry args={[0.75, 1.6, 0.08]} />
-        <meshStandardMaterial color="#8ea6c8" wireframe />
+        <meshStandardMaterial color="#7a7d85" wireframe />
       </mesh>
     </group>
   );

@@ -14,6 +14,12 @@ import { findFrame, validateAction } from '../model/validate';
 import { useEditorStore } from '../store/editorStore';
 import { getCameraSnapshot } from '../three/cameraRegistry';
 import { addAssetFromFile, downloadAssetGLB } from '../lib/assets';
+import { IconWarn, IconX } from '../ui/icons';
+import {
+  field as fieldTheme, fieldLabel as fieldLabelTheme, group as groupTheme,
+  groupTitle as groupTitleTheme, input as inputTheme, miniBtn as miniBtnTheme,
+  miniBtnActive as miniBtnActiveTheme, numInput, panelRight as panelRightTheme,
+} from '../ui/theme';
 
 function NumField({ label, value, onChange, step = 1 }: {
   label: string; value: number; onChange: (v: number) => void; step?: number;
@@ -26,7 +32,7 @@ function NumField({ label, value, onChange, step = 1 }: {
         step={step}
         value={Math.round(value * 100) / 100}
         onChange={(e) => onChange(Number(e.target.value))}
-        style={inputStyle}
+        style={numInput}
       />
     </label>
   );
@@ -150,7 +156,9 @@ function ActionsEditor({ node }: { node: Node }) {
               </label>
             )}
             {issues.map((issue, i) => (
-              <div key={i} style={{ color: '#ffb35c', fontSize: 11 }}>⚠ {issue.message}</div>
+              <div key={i} style={{ color: 'var(--warn)', fontSize: 11, display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+                <IconWarn size={12} style={{ marginTop: 1 }} /> {issue.message}
+              </div>
             ))}
           </div>
         );
@@ -162,7 +170,7 @@ function ActionsEditor({ node }: { node: Node }) {
             style={miniBtnStyle}
             onClick={() => setActions([...actions, defaultAction(t, doc, frame)])}
           >
-            ＋{t}
+            + {t}
           </button>
         ))}
       </div>
@@ -234,12 +242,12 @@ function CameraEditor({ node }: { node: View3DNode }) {
               setCameras(rest, node.activeCameraId === cam.id ? rest[0]?.id : undefined);
             }}
           >
-            ✕
+            <IconX size={12} />
           </button>
         </div>
       ))}
       <button style={{ ...miniBtnStyle, marginTop: 4 }} onClick={() => saveCurrentView()}>
-        ＋ 現在の視点をカメラとして保存
+        + 現在の視点をカメラとして保存
       </button>
       <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, marginTop: 8 }}>
         <input
@@ -253,7 +261,8 @@ function CameraEditor({ node }: { node: View3DNode }) {
   );
 }
 
-export default function PropertyPanel() {
+export default function PropertyPanel({ style }: { style?: React.CSSProperties }) {
+  const rootStyle: React.CSSProperties = { ...panelStyle, ...style };
   const doc = useEditorStore((s) => s.doc);
   const frame = useEditorStore((s) => s.currentFrame());
   const node = useEditorStore((s) => s.selectedNode());
@@ -263,12 +272,12 @@ export default function PropertyPanel() {
   const setSculptNode = useEditorStore((s) => s.setSculptNode);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  if (!doc || !frame) return <div style={panelStyle} />;
+  if (!doc || !frame) return <div style={rootStyle} />;
 
   if (!node) {
     const targetFrame = findFrame(doc, frame.id) ?? frame;
     return (
-      <div style={panelStyle}>
+      <div style={rootStyle}>
         <div style={groupStyle}>
           <div style={groupTitleStyle}>プロジェクト</div>
           <label style={fieldStyle}>
@@ -299,7 +308,7 @@ export default function PropertyPanel() {
           <NumField label="幅" value={targetFrame.width} onChange={(v) => patchFrame(targetFrame.id, { width: v })} />
           <NumField label="高さ" value={targetFrame.height} onChange={(v) => patchFrame(targetFrame.id, { height: v })} />
           <ColorField label="背景色" value={targetFrame.background} onChange={(v) => patchFrame(targetFrame.id, { background: v })} />
-          <p style={{ color: '#8496b3', fontSize: 12 }}>
+          <p style={{ color: 'var(--text-faint)', fontSize: 12 }}>
             ノードを選択すると、ここでプロパティ・カメラ・操作（Action）を編集できます。
           </p>
         </div>
@@ -310,7 +319,7 @@ export default function PropertyPanel() {
   const patch = (p: Record<string, unknown>) => patchNode(node.id, p as Partial<Node>);
 
   return (
-    <div style={panelStyle}>
+    <div style={rootStyle}>
       <div style={groupStyle}>
         <div style={groupTitleStyle}>{node.type}: 名前・配置</div>
         <label style={fieldStyle}>
@@ -437,8 +446,8 @@ export default function PropertyPanel() {
                 >
                   GLB 書き出し
                 </button>
-                <button style={{ ...miniBtnStyle, background: '#2f6fd0', color: '#fff' }} onClick={() => setSculptNode(n.id)}>
-                  🗿 スカルプト
+                <button style={{ ...miniBtnStyle, ...miniBtnActiveStyle }} onClick={() => setSculptNode(n.id)}>
+                  スカルプトを開く
                 </button>
               </div>
             </div>
@@ -452,24 +461,15 @@ export default function PropertyPanel() {
   );
 }
 
-const panelStyle: React.CSSProperties = {
-  width: 288, background: '#1d2534', color: '#dbe6f5', overflowY: 'auto',
-  borderLeft: '1px solid #11161f', fontSize: 13, flexShrink: 0,
-};
-const groupStyle: React.CSSProperties = { padding: '10px 12px 14px', borderBottom: '1px solid #11161f' };
-const groupTitleStyle: React.CSSProperties = { fontWeight: 700, color: '#eef3fa', marginBottom: 8, fontSize: 12 };
-const fieldStyle: React.CSSProperties = { display: 'block', marginBottom: 8 };
-const fieldLabelStyle: React.CSSProperties = { display: 'block', fontSize: 11, color: '#8ea6c8', marginBottom: 3 };
-const inputStyle: React.CSSProperties = {
-  width: '100%', background: '#11161f', color: '#e6eefb', border: '1px solid #3a4f7a',
-  borderRadius: 5, padding: '5px 7px', fontSize: 13, boxSizing: 'border-box',
-};
-const miniBtnStyle: React.CSSProperties = {
-  background: '#2a3850', color: '#dbe6f5', border: '1px solid #3a4f7a',
-  borderRadius: 5, padding: '3px 8px', cursor: 'pointer', fontSize: 11,
-};
-const miniBtnActiveStyle: React.CSSProperties = { background: '#2f6fd0', color: '#fff' };
+const panelStyle = panelRightTheme;
+const groupStyle = groupTheme;
+const groupTitleStyle = groupTitleTheme;
+const fieldStyle = fieldTheme;
+const fieldLabelStyle = fieldLabelTheme;
+const inputStyle = inputTheme;
+const miniBtnStyle = miniBtnTheme;
+const miniBtnActiveStyle = miniBtnActiveTheme;
 const actionRowStyle: React.CSSProperties = {
-  background: '#16202f', border: '1px solid #2a3850', borderRadius: 6,
+  background: 'var(--inset)', border: '1px solid var(--line)', borderRadius: 'var(--radius)',
   padding: 8, marginBottom: 8,
 };

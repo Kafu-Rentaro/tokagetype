@@ -10,10 +10,45 @@ import {
 } from '../storage/db';
 import { deleteAssetBlob, saveAssetBlob } from '../storage/db';
 import { useEditorStore } from '../store/editorStore';
+import { useUiStore } from '../store/uiStore';
 import { exportTokage, importTokage, downloadBlob } from '../lib/tokage';
 import { invalidateAssetUrl } from '../three/assetUrls';
+import {
+  IconButtonShape, IconCopy, IconCube, IconDownload, IconLayers, IconMonitor,
+  IconPencil, IconPlay, IconPlus, IconRect, IconRedo, IconSliders,
+  IconSmartphone, IconTrash, IconType, IconUndo, IconUpload,
+} from '../ui/icons';
+import { btn, btnActive, divider, select as selectTheme } from '../ui/theme';
 
 const LAST_PROJECT_KEY = 'tokagetype:lastProjectId';
+
+/** UI モード切替（PC / スマホ）。手動選択は localStorage に保持される */
+function UiModeSwitch() {
+  const uiMode = useUiStore((s) => s.uiMode);
+  const setUiMode = useUiStore((s) => s.setUiMode);
+  const seg = (active: boolean): React.CSSProperties => ({
+    display: 'inline-flex', alignItems: 'center', gap: 5,
+    background: active ? 'var(--accent)' : 'transparent',
+    color: active ? 'var(--accent-ink)' : 'var(--text-dim)',
+    border: 'none', borderRadius: 3, padding: '4px 8px', cursor: 'pointer', fontSize: 12,
+  });
+  return (
+    <span
+      style={{
+        display: 'inline-flex', gap: 2, padding: 2,
+        border: '1px solid var(--line)', borderRadius: 'var(--radius)', background: 'var(--inset)',
+      }}
+      title="UI 切替（PC / スマホ）"
+    >
+      <button style={seg(uiMode === 'pc')} onClick={() => setUiMode('pc')}>
+        <IconMonitor size={14} /> PC
+      </button>
+      <button style={seg(uiMode === 'mobile')} onClick={() => setUiMode('mobile')}>
+        <IconSmartphone size={14} /> スマホ
+      </button>
+    </span>
+  );
+}
 
 export default function Toolbar() {
   const doc = useEditorStore((s) => s.doc);
@@ -28,6 +63,7 @@ export default function Toolbar() {
   const frame = useEditorStore((s) => s.currentFrame());
   const selectedNodeId = useEditorStore((s) => s.selectedNodeId);
   const selectNode = useEditorStore((s) => s.selectNode);
+  const uiMode = useUiStore((s) => s.uiMode);
 
   const [projects, setProjects] = useState<ProjectDoc[]>([]);
   const importRef = useRef<HTMLInputElement>(null);
@@ -142,15 +178,83 @@ export default function Toolbar() {
   const canUndo = (history?.past.length ?? 0) > 0;
   const canRedo = (history?.future.length ?? 0) > 0;
   const editing = mode === 'edit';
+  const mobile = uiMode === 'mobile';
+
+  const modeToggle = (
+    <span
+      style={{
+        display: 'inline-flex', gap: 2, padding: 2,
+        border: '1px solid var(--line)', borderRadius: 'var(--radius)', background: 'var(--inset)',
+      }}
+    >
+      <button
+        style={{ ...btn, border: 'none', background: editing ? 'var(--accent)' : 'transparent', color: editing ? 'var(--accent-ink)' : 'var(--text-dim)', padding: '5px 10px' }}
+        onClick={() => setMode('edit')}
+      >
+        <IconPencil size={14} /> 編集
+      </button>
+      <button
+        style={{ ...btn, border: 'none', background: !editing ? 'var(--accent)' : 'transparent', color: !editing ? 'var(--accent-ink)' : 'var(--text-dim)', padding: '5px 10px' }}
+        onClick={() => setMode('play')}
+      >
+        <IconPlay size={14} /> 再生
+      </button>
+    </span>
+  );
+
+  const saveIndicator = (
+    <span style={{ color: 'var(--text-dim)', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+      <span
+        style={{
+          width: 7, height: 7, borderRadius: '50%', display: 'inline-block',
+          background: saveState === 'saved' ? 'var(--ok)' : 'var(--warn)',
+        }}
+      />
+      {mobile ? '' : saveState === 'saved' ? '保存済み' : saveState === 'saving' ? '保存中…' : '未保存の変更'}
+    </span>
+  );
+
+  if (mobile) {
+    return (
+      <div style={barStyle}>
+        <span style={wordmarkStyle}>tokagetype</span>
+        <select
+          value={doc?.id ?? ''}
+          onChange={(e) => void switchProject(e.target.value)}
+          style={{ ...selectTheme, flex: '1 1 auto', minWidth: 0, maxWidth: 'none' }}
+          title="プロジェクト切り替え"
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+          {doc && !projects.some((p) => p.id === doc.id) && <option value={doc.id}>{doc.name}</option>}
+        </select>
+        {saveIndicator}
+        <UiModeSwitch />
+        {modeToggle}
+        <input
+          ref={importRef}
+          type="file"
+          accept=".tokage,.zip"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (f) void handleImport(f);
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div style={barStyle}>
-      <strong style={{ fontSize: 15 }}>🦎 tokagetype</strong>
+      <span style={wordmarkStyle}>tokagetype</span>
 
       <select
         value={doc?.id ?? ''}
         onChange={(e) => void switchProject(e.target.value)}
-        style={selectStyle}
+        style={{ ...selectTheme, maxWidth: 220 }}
         title="プロジェクト切り替え"
       >
         {projects.map((p) => (
@@ -158,10 +262,10 @@ export default function Toolbar() {
         ))}
         {doc && !projects.some((p) => p.id === doc.id) && <option value={doc.id}>{doc.name}</option>}
       </select>
-      <button style={btnStyle} onClick={() => void newProject()}>＋ 新規</button>
-      <button style={btnStyle} onClick={() => void deleteCurrentProject()}>🗑 削除</button>
-      <button style={btnStyle} onClick={() => void handleExport()}>⬇ .tokage</button>
-      <button style={btnStyle} onClick={() => importRef.current?.click()}>⬆ .tokage 読込</button>
+      <button style={btn} onClick={() => void newProject()}><IconPlus size={14} /> 新規</button>
+      <button style={btn} onClick={() => void deleteCurrentProject()}><IconTrash size={14} /> 削除</button>
+      <button style={btn} onClick={() => void handleExport()}><IconDownload size={14} /> .tokage</button>
+      <button style={btn} onClick={() => importRef.current?.click()}><IconUpload size={14} /> .tokage 読込</button>
       <input
         ref={importRef}
         type="file"
@@ -174,55 +278,110 @@ export default function Toolbar() {
         }}
       />
 
-      <span style={dividerStyle} />
+      <span style={divider} />
 
       {editing && (
         <>
-          <button style={btnStyle} onClick={() => addNode('rect')}>▭ 矩形</button>
-          <button style={btnStyle} onClick={() => addNode('text')}>T テキスト</button>
-          <button style={btnStyle} onClick={() => addNode('button')}>🔘 ボタン</button>
-          <button style={btnStyle} onClick={() => addNode('view3d')}>🧊 3Dビュー</button>
-          <span style={dividerStyle} />
-          <button style={btnStyle} onClick={deleteSelected} disabled={!selectedNodeId}>削除</button>
-          <button style={btnStyle} onClick={duplicateSelected} disabled={!selectedNodeId}>複製</button>
-          <button style={btnStyle} onClick={undo} disabled={!canUndo}>↩ Undo</button>
-          <button style={btnStyle} onClick={redo} disabled={!canRedo}>↪ Redo</button>
+          <button style={btn} onClick={() => addNode('rect')}><IconRect size={14} /> 矩形</button>
+          <button style={btn} onClick={() => addNode('text')}><IconType size={14} /> テキスト</button>
+          <button style={btn} onClick={() => addNode('button')}><IconButtonShape size={14} /> ボタン</button>
+          <button style={btn} onClick={() => addNode('view3d')}><IconCube size={14} /> 3Dビュー</button>
+          <span style={divider} />
+          <button style={btn} onClick={deleteSelected} disabled={!selectedNodeId}>削除</button>
+          <button style={btn} onClick={duplicateSelected} disabled={!selectedNodeId}>複製</button>
+          <button style={btn} onClick={undo} disabled={!canUndo}><IconUndo size={14} /> Undo</button>
+          <button style={btn} onClick={redo} disabled={!canRedo}><IconRedo size={14} /> Redo</button>
         </>
       )}
 
       <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ color: '#8ea6c8', fontSize: 12 }}>
-          {saveState === 'saved' ? '✓ 保存済み' : saveState === 'saving' ? '保存中…' : '● 未保存の変更'}
-        </span>
-        <button
-          style={{ ...btnStyle, ...(editing ? {} : modeBtnActiveStyle) }}
-          onClick={() => setMode('edit')}
-        >
-          ✎ 編集
-        </button>
-        <button
-          style={{ ...btnStyle, ...(editing ? modeBtnActiveStyle : {}) }}
-          onClick={() => setMode('play')}
-        >
-          ▶ 再生
-        </button>
+        {saveIndicator}
+        <UiModeSwitch />
+        {modeToggle}
       </span>
+    </div>
+  );
+}
+
+/** スマホ UI の下部ツールバー（タップ対象 44px 以上、横スクロール可） */
+export function MobileToolBar() {
+  const doc = useEditorStore((s) => s.doc);
+  const frame = useEditorStore((s) => s.currentFrame());
+  const commit = useEditorStore((s) => s.commit);
+  const selectNode = useEditorStore((s) => s.selectNode);
+  const selectedNodeId = useEditorStore((s) => s.selectedNodeId);
+  const undo = useEditorStore((s) => s.undo);
+  const redo = useEditorStore((s) => s.redo);
+  const history = useEditorStore((s) => s.history);
+  const setSheet = useUiStore((s) => s.setSheet);
+  const sheet = useUiStore((s) => s.sheet);
+
+  const addNode = (type: Node['type']) => {
+    if (!doc || !frame) return;
+    const offset = (frame.nodes.length % 5) * 18;
+    const node = createNode(type, 40 + offset, 60 + offset);
+    commit(addNodeToFrame(doc, frame.id, node));
+    selectNode(node.id);
+  };
+  const deleteSelected = () => {
+    if (!doc || !frame || !selectedNodeId) return;
+    commit(removeNodeFromFrame(doc, frame.id, selectedNodeId));
+    selectNode(null);
+  };
+  const duplicateSelected = () => {
+    if (!doc || !frame || !selectedNodeId) return;
+    const src = frame.nodes.find((n) => n.id === selectedNodeId);
+    if (!src) return;
+    const copy = JSON.parse(JSON.stringify(src)) as Node;
+    copy.id = `${src.id}_copy_${Math.random().toString(36).slice(2, 7)}`;
+    copy.name = `${src.name} のコピー`;
+    copy.x += 24;
+    copy.y += 24;
+    commit(addNodeToFrame(doc, frame.id, copy));
+    selectNode(copy.id);
+  };
+
+  const toolBtn = (active = false): React.CSSProperties => ({
+    display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: 2, minWidth: 56, height: 52, padding: '4px 6px', flexShrink: 0,
+    background: active ? 'var(--accent)' : 'var(--panel-2)',
+    color: active ? 'var(--accent-ink)' : 'var(--text)',
+    border: '1px solid var(--line)', borderRadius: 'var(--radius)',
+    cursor: 'pointer', fontSize: 10,
+  });
+
+  return (
+    <div
+      style={{
+        display: 'flex', gap: 6, padding: '6px 8px calc(6px + env(safe-area-inset-bottom))',
+        background: 'var(--panel)', borderTop: '1px solid var(--line)',
+        overflowX: 'auto', WebkitOverflowScrolling: 'touch', flexShrink: 0,
+      }}
+    >
+      <button style={toolBtn(sheet === 'left')} onClick={() => setSheet(sheet === 'left' ? null : 'left')}>
+        <IconLayers size={18} /> 画面/層
+      </button>
+      <button style={toolBtn()} onClick={() => addNode('rect')}><IconRect size={18} /> 矩形</button>
+      <button style={toolBtn()} onClick={() => addNode('text')}><IconType size={18} /> テキスト</button>
+      <button style={toolBtn()} onClick={() => addNode('button')}><IconButtonShape size={18} /> ボタン</button>
+      <button style={toolBtn()} onClick={() => addNode('view3d')}><IconCube size={18} /> 3D</button>
+      <button style={toolBtn()} onClick={duplicateSelected} disabled={!selectedNodeId}><IconCopy size={18} /> 複製</button>
+      <button style={toolBtn()} onClick={deleteSelected} disabled={!selectedNodeId}><IconTrash size={18} /> 削除</button>
+      <button style={toolBtn()} onClick={undo} disabled={(history?.past.length ?? 0) === 0}><IconUndo size={18} /> Undo</button>
+      <button style={toolBtn()} onClick={redo} disabled={(history?.future.length ?? 0) === 0}><IconRedo size={18} /> Redo</button>
+      <button style={toolBtn(sheet === 'right')} onClick={() => setSheet(sheet === 'right' ? null : 'right')}>
+        <IconSliders size={18} /> プロパティ
+      </button>
     </div>
   );
 }
 
 const barStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-  background: '#141c2c', color: '#eef3fa', borderBottom: '1px solid #0c1119',
+  background: 'var(--panel)', color: 'var(--text)', borderBottom: '1px solid var(--line)',
   flexWrap: 'wrap',
 };
-const btnStyle: React.CSSProperties = {
-  background: '#243350', color: '#e6eefb', border: '1px solid #3a4f7a',
-  borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 13,
+const wordmarkStyle: React.CSSProperties = {
+  fontSize: 15, fontWeight: 800, letterSpacing: '0.02em', whiteSpace: 'nowrap',
+  borderLeft: '4px solid var(--accent)', paddingLeft: 8, lineHeight: 1.1,
 };
-const modeBtnActiveStyle: React.CSSProperties = { background: '#2f6fd0', borderColor: '#2f6fd0', color: '#fff' };
-const selectStyle: React.CSSProperties = {
-  background: '#0f1626', color: '#e6eefb', border: '1px solid #3a4f7a',
-  borderRadius: 6, padding: '5px 8px', fontSize: 13, maxWidth: 220,
-};
-const dividerStyle: React.CSSProperties = { width: 1, height: 22, background: '#3a4f7a', margin: '0 2px' };

@@ -1,0 +1,211 @@
+{
+  "version": 1,
+  "id": "proj_f94c67b3d",
+  "name": "サンプル: スマホ商品紹介",
+  "frames": [
+    {
+      "id": "frame_5974864f9",
+      "name": "商品紹介",
+      "width": 390,
+      "height": 844,
+      "background": "#f5f8fc",
+      "nodes": [
+        {
+          "id": "node_ba4444fe3",
+          "name": "商品名",
+          "type": "text",
+          "x": 24,
+          "y": 32,
+          "width": 342,
+          "height": 44,
+          "text": "Tokage Phone 1",
+          "fontSize": 30,
+          "fill": "#16283f",
+          "fontStyle": "bold",
+          "align": "left"
+        },
+        {
+          "id": "node_1c75fc724",
+          "name": "価格",
+          "type": "text",
+          "x": 24,
+          "y": 76,
+          "width": 342,
+          "height": 32,
+          "text": "¥128,800（税込）",
+          "fontSize": 18,
+          "fill": "#5a6c85",
+          "align": "left"
+        },
+        {
+          "id": "node_7257c1ea2",
+          "name": "商品 3Dビュー",
+          "type": "view3d",
+          "x": 40,
+          "y": 120,
+          "width": 310,
+          "height": 400,
+          "assetId": "asset_179b92cb1",
+          "activeCameraId": "cam_front",
+          "cameras": [
+            {
+              "id": "cam_front",
+              "name": "front",
+              "position": [
+                0,
+                0.8,
+                3.2
+              ],
+              "target": [
+                0,
+                0.8,
+                0
+              ]
+            },
+            {
+              "id": "cam_back",
+              "name": "back",
+              "position": [
+                0,
+                0.8,
+                -3.2
+              ],
+              "target": [
+                0,
+                0.8,
+                0
+              ]
+            }
+          ],
+          "autoRotate": false
+        },
+        {
+          "id": "node_601e68ee5",
+          "name": "背面を見るボタン",
+          "type": "button",
+          "x": 24,
+          "y": 548,
+          "width": 163,
+          "height": 52,
+          "label": "背面を見る",
+          "fill": "#111111",
+          "textColor": "#ffffff",
+          "cornerRadius": 26,
+          "fontSize": 16,
+          "actions": [
+            {
+              "type": "setCamera",
+              "viewNodeId": "node_7257c1ea2",
+              "cameraId": "cam_back"
+            }
+          ]
+        },
+        {
+          "id": "node_ded281fe6",
+          "name": "前面を見るボタン",
+          "type": "button",
+          "x": 203,
+          "y": 548,
+          "width": 163,
+          "height": 52,
+          "label": "前面を見る",
+          "fill": "#e8eef7",
+          "textColor": "#16283f",
+          "cornerRadius": 26,
+          "fontSize": 16,
+          "actions": [
+            {
+              "type": "setCamera",
+              "viewNodeId": "node_7257c1ea2",
+              "cameraId": "cam_front"
+            }
+          ]
+        },
+        {
+          "id": "node_d69c2b658",
+          "name": "詳細ボタン",
+          "type": "button",
+          "x": 24,
+          "y": 624,
+          "width": 342,
+          "height": 52,
+          "label": "スペック詳細へ",
+          "fill": "#2f6fd0",
+          "textColor": "#ffffff",
+          "cornerRadius": 26,
+          "fontSize": 16,
+          "actions": [
+            {
+              "type": "navigate",
+              "frameId": "frame_eb6bd6107"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "frame_eb6bd6107",
+      "name": "スペック詳細",
+      "width": 390,
+      "height": 844,
+      "background": "#ffffff",
+      "nodes": [
+        {
+          "id": "node_4207148fa",
+          "name": "詳細タイトル",
+          "type": "text",
+          "x": 24,
+          "y": 40,
+          "width": 342,
+          "height": 40,
+          "text": "スペック詳細",
+          "fontSize": 26,
+          "fill": "#16283f",
+          "fontStyle": "bold",
+          "align": "left"
+        },
+        {
+          "id": "node_e37b7035b",
+          "name": "詳細本文",
+          "type": "text",
+          "x": 24,
+          "y": 110,
+          "width": 342,
+          "height": 200,
+          "text": "ディスプレイ: 6.7インチ\nカメラ: 50MP 広角\nバッテリー: 5,000mAh\n重さ: 187g",
+          "fontSize": 18,
+          "fill": "#33465e",
+          "align": "left"
+        },
+        {
+          "id": "node_68cbb8fac",
+          "name": "戻るボタン",
+          "type": "button",
+          "x": 24,
+          "y": 724,
+          "width": 342,
+          "height": 52,
+          "label": "商品紹介に戻る",
+          "fill": "#111111",
+          "textColor": "#ffffff",
+          "cornerRadius": 26,
+          "fontSize": 16,
+          "actions": [
+            {
+              "type": "navigate",
+              "frameId": "frame_5974864f9"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset_179b92cb1",
+      "name": "sample-phone.glb",
+      "kind": "glb"
+    }
+  ],
+  "startFrameId": "frame_5974864f9"
+}

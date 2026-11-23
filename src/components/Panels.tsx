@@ -1,8 +1,10 @@
 import { createFrame } from '../model/factory';
 import { cloneDoc, moveNodeLayer, removeNodeFromFrame } from '../model/mutate';
 import { useEditorStore } from '../store/editorStore';
+import { IconChevronDown, IconChevronUp, IconEye, IconEyeOff, IconPlus, IconTrash } from '../ui/icons';
+import { iconBtn, miniBtn, panelLeft } from '../ui/theme';
 
-export default function Panels() {
+export default function Panels({ style }: { style?: React.CSSProperties }) {
   const doc = useEditorStore((s) => s.doc);
   const frame = useEditorStore((s) => s.currentFrame());
   const currentFrameId = useEditorStore((s) => s.currentFrameId);
@@ -12,7 +14,7 @@ export default function Panels() {
   const commit = useEditorStore((s) => s.commit);
   const patchNode = useEditorStore((s) => s.patchNode);
 
-  if (!doc || !frame) return <div style={panelStyle} />;
+  if (!doc || !frame) return <div style={{ ...panelLeft, ...style }} />;
 
   const addFrame = () => {
     const f = createFrame(`フレーム ${doc.frames.length + 1}`);
@@ -38,11 +40,11 @@ export default function Panels() {
   };
 
   return (
-    <div style={panelStyle}>
+    <div style={{ ...panelLeft, ...style }}>
       <div style={sectionStyle}>
         <div style={sectionHeaderStyle}>
           <span>フレーム</span>
-          <button style={smallBtnStyle} onClick={addFrame}>＋ 追加</button>
+          <button style={miniBtn} onClick={addFrame}><IconPlus size={12} /> 追加</button>
         </div>
         {doc.frames.map((f) => (
           <div
@@ -59,20 +61,20 @@ export default function Panels() {
             </span>
             {doc.startFrameId !== f.id && (
               <button
-                style={tinyBtnStyle}
+                style={miniBtn}
                 title="開始フレームにする"
                 onClick={(e) => { e.stopPropagation(); setStartFrame(f.id); }}
               >
-                ▶開始
+                開始にする
               </button>
             )}
             <button
-              style={tinyBtnStyle}
+              style={iconBtn}
               title="フレームを削除"
               disabled={doc.frames.length <= 1}
               onClick={(e) => { e.stopPropagation(); deleteFrame(f.id); }}
             >
-              🗑
+              <IconTrash size={14} />
             </button>
           </div>
         ))}
@@ -97,31 +99,31 @@ export default function Panels() {
               {n.name}
             </span>
             <button
-              style={tinyBtnStyle}
+              style={iconBtn}
               title="前面へ"
               onClick={(e) => { e.stopPropagation(); commit(moveNodeLayer(doc, frame.id, n.id, 1)); }}
             >
-              ↑
+              <IconChevronUp size={14} />
             </button>
             <button
-              style={tinyBtnStyle}
+              style={iconBtn}
               title="背面へ"
               onClick={(e) => { e.stopPropagation(); commit(moveNodeLayer(doc, frame.id, n.id, -1)); }}
             >
-              ↓
+              <IconChevronDown size={14} />
             </button>
             <button
-              style={tinyBtnStyle}
+              style={iconBtn}
               title="表示切替"
               onClick={(e) => {
                 e.stopPropagation();
                 patchNode(n.id, { visible: n.visible === false ? true : false } as never);
               }}
             >
-              {n.visible === false ? '🙈' : '👁'}
+              {n.visible === false ? <IconEyeOff size={14} /> : <IconEye size={14} />}
             </button>
             <button
-              style={tinyBtnStyle}
+              style={iconBtn}
               title="削除"
               onClick={(e) => {
                 e.stopPropagation();
@@ -129,43 +131,34 @@ export default function Panels() {
                 if (selectedNodeId === n.id) selectNode(null);
               }}
             >
-              🗑
+              <IconTrash size={14} />
             </button>
           </div>
         ))}
-        {frame.nodes.length === 0 && <div style={{ color: '#8496b3', fontSize: 12, padding: 6 }}>ノードがありません</div>}
+        {frame.nodes.length === 0 && <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 6 }}>ノードがありません</div>}
       </div>
     </div>
   );
 }
 
-const panelStyle: React.CSSProperties = {
-  width: 232, background: '#1d2534', color: '#dbe6f5', overflowY: 'auto',
-  borderRight: '1px solid #11161f', fontSize: 13, flexShrink: 0,
-};
-const sectionStyle: React.CSSProperties = { padding: '10px 10px 14px', borderBottom: '1px solid #11161f' };
+const sectionStyle: React.CSSProperties = { padding: '12px 10px 14px', borderBottom: '1px solid var(--line)' };
 const sectionHeaderStyle: React.CSSProperties = {
   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-  fontWeight: 700, marginBottom: 8, color: '#eef3fa',
+  fontWeight: 700, marginBottom: 8, color: 'var(--text)', fontSize: 11, letterSpacing: '0.08em',
 };
 const rowStyle: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 4, padding: '5px 6px',
-  borderRadius: 6, cursor: 'pointer', marginBottom: 2,
+  display: 'flex', alignItems: 'center', gap: 4, padding: '6px 6px',
+  borderRadius: 'var(--radius)', cursor: 'pointer', marginBottom: 2, minHeight: 32,
 };
-const rowActiveStyle: React.CSSProperties = { background: '#2f4a7a' };
-const smallBtnStyle: React.CSSProperties = {
-  background: '#2a3850', color: '#dbe6f5', border: '1px solid #3a4f7a',
-  borderRadius: 5, padding: '2px 8px', cursor: 'pointer', fontSize: 12,
-};
-const tinyBtnStyle: React.CSSProperties = {
-  background: 'transparent', color: '#c7d3e6', border: 'none',
-  cursor: 'pointer', fontSize: 11, padding: '2px 3px',
+const rowActiveStyle: React.CSSProperties = {
+  background: 'var(--panel-2)', boxShadow: 'inset 2px 0 0 var(--accent)',
 };
 const badgeStyle: React.CSSProperties = {
-  marginLeft: 6, background: '#2f6fd0', color: '#fff', borderRadius: 4,
+  marginLeft: 6, background: 'var(--accent)', color: 'var(--accent-ink)', borderRadius: 3,
   padding: '1px 6px', fontSize: 10,
 };
 const typeBadgeStyle: React.CSSProperties = {
-  background: '#11161f', color: '#8ea6c8', borderRadius: 4,
-  padding: '1px 5px', fontSize: 10, minWidth: 44, textAlign: 'center',
+  background: 'var(--inset)', color: 'var(--text-dim)', borderRadius: 3,
+  padding: '1px 5px', fontSize: 10, minWidth: 46, textAlign: 'center',
+  fontFamily: 'var(--mono)', textTransform: 'uppercase',
 };

@@ -1,9 +1,12 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { ButtonNode, Node, RectNode, TextNode, View3DNode } from '../model/types';
 import { useEditorStore } from '../store/editorStore';
 import { usePlayStore } from '../store/playStore';
+import { useUiStore } from '../store/uiStore';
 import { useAssetUrl } from '../three/assetUrls';
 import View3DCanvas from '../three/View3DCanvas';
+import { IconBack, IconPlay } from '../ui/icons';
+import { btn } from '../ui/theme';
 
 function PlayView3D({ node }: { node: View3DNode }) {
   const assetUrl = useAssetUrl(node.assetId);
@@ -95,7 +98,6 @@ function PlayNode({ node }: { node: Node }) {
             border: 'none',
             cursor: 'pointer',
             fontFamily: 'inherit',
-            boxShadow: '0 2px 8px rgba(20,30,50,0.18)',
           }}
         >
           {n.label}
@@ -105,7 +107,7 @@ function PlayNode({ node }: { node: Node }) {
     case 'view3d': {
       const n = node as View3DNode;
       return (
-        <div onClick={onClick} style={{ ...base, background: '#e8eef7', overflow: 'hidden' }}>
+        <div onClick={onClick} style={{ ...base, background: '#dde1e6', overflow: 'hidden' }}>
           <PlayView3D node={n} />
         </div>
       );
@@ -119,6 +121,10 @@ export default function PlayView() {
   const start = usePlayStore((s) => s.start);
   const stop = usePlayStore((s) => s.stop);
   const backToStart = usePlayStore((s) => s.backToStart);
+  const mobile = useUiStore((s) => s.uiMode) === 'mobile';
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1280,
+  );
 
   useEffect(() => {
     if (doc) start(doc);
@@ -126,42 +132,53 @@ export default function PlayView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.id]);
 
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   if (!doc) return null;
   const frame = doc.frames.find((f) => f.id === frameId) ?? doc.frames.find((f) => f.id === doc.startFrameId) ?? doc.frames[0];
   if (!frame) return null;
 
+  // スマホ UI: フレームを画面幅にフィットさせる
+  const fit = mobile ? Math.min(1, Math.max(0.2, (viewportWidth - 24) / frame.width)) : 1;
+
   return (
-    <div style={{
-      flex: 1, overflow: 'auto', background: '#2a3140', display: 'flex',
-      flexDirection: 'column', alignItems: 'center', padding: 20, gap: 12,
-    }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', color: '#dbe6f5', fontSize: 13 }}>
-        <span>▶ 再生中: <strong>{frame.name}</strong></span>
+    <div
+      className="dotgrid-bg"
+      style={{
+        flex: 1, overflow: 'auto', display: 'flex',
+        flexDirection: 'column', alignItems: 'center', padding: mobile ? 12 : 20, gap: 12,
+      }}
+    >
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', color: 'var(--text)', fontSize: 13, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <IconPlay size={13} /> 再生中: <strong>{frame.name}</strong>
+        </span>
         {frame.id !== doc.startFrameId && (
-          <button
-            onClick={() => backToStart(doc)}
-            style={{
-              background: '#243350', color: '#e6eefb', border: '1px solid #3a4f7a',
-              borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
-            }}
-          >
-            ⤺ 開始フレームに戻る
+          <button onClick={() => backToStart(doc)} style={btn}>
+            <IconBack size={14} /> 開始フレームに戻る
           </button>
         )}
       </div>
-      <div
-        style={{
-          position: 'relative',
-          width: frame.width,
-          height: frame.height,
-          background: frame.background,
-          borderRadius: 28,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-          overflow: 'hidden',
-          flexShrink: 0,
-        }}
-      >
-        {frame.nodes.map((n) => <PlayNode key={n.id} node={n} />)}
+      <div style={{ width: frame.width * fit, height: frame.height * fit, flexShrink: 0 }}>
+        <div
+          style={{
+            position: 'relative',
+            width: frame.width,
+            height: frame.height,
+            background: frame.background,
+            borderRadius: 24,
+            border: '1px solid var(--line-strong)',
+            overflow: 'hidden',
+            transform: fit !== 1 ? `scale(${fit})` : undefined,
+            transformOrigin: 'top left',
+          }}
+        >
+          {frame.nodes.map((n) => <PlayNode key={n.id} node={n} />)}
+        </div>
       </div>
     </div>
   );

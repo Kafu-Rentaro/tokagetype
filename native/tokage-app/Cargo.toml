@@ -1,0 +1,10 @@
+[package]
+name = "tokage-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "tokagetype native UI (egui/eframe) — foundation build"
+
+[dependencies]
+tokage-core = { path = "../tokage-core" }
+eframe = { version = "0.29", default-features = false, features = ["glow", "x11", "wayland", "default_fonts"] }

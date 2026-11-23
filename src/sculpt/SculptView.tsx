@@ -10,6 +10,8 @@ import { invalidateAssetUrl } from '../three/assetUrls';
 import { buildSphereGLB, exportToGLB, parseGLB } from '../three/gltfUtils';
 import { applyBrush, ensureBVH, type BrushMode } from './brush';
 import { useEditorStore } from '../store/editorStore';
+import { IconRedo, IconUndo } from '../ui/icons';
+import { btn as themeBtn } from '../ui/theme';
 
 interface SculptViewProps {
   node: View3DNode;
@@ -202,12 +204,12 @@ export default function SculptView({ node, onClose }: SculptViewProps) {
     <div style={styles.overlay}>
       <div style={styles.header}>
         <strong>スカルプト: {node.name}</strong>
-        <span style={{ color: '#9fb2cc', fontSize: 12 }}>
+        <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>
           頂点数は固定です（リメッシュなし）。1ストローク = 1 Undo。
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button style={styles.btn} onClick={undo} disabled={undoStack.current.length === 0}>↩ Undo</button>
-          <button style={styles.btn} onClick={redo} disabled={redoStack.current.length === 0}>↪ Redo</button>
+          <button style={styles.btn} onClick={undo} disabled={undoStack.current.length === 0}><IconUndo size={14} /> Undo</button>
+          <button style={styles.btn} onClick={redo} disabled={redoStack.current.length === 0}><IconRedo size={14} /> Redo</button>
           <button style={styles.btn} onClick={onClose}>閉じる</button>
           <button style={{ ...styles.btn, ...styles.primary }} onClick={applyAndSave} disabled={!dirty || saving}>
             {saving ? '保存中…' : '適用して保存（GLB化）'}
@@ -236,7 +238,7 @@ export default function SculptView({ node, onClose }: SculptViewProps) {
           <input type="checkbox" checked={rotateMode} onChange={(e) => setRotateMode(e.target.checked)} />
           視点回転モード（ブラシ無効）
         </label>
-        {error && <span style={{ color: '#ff9c9c' }}>{error}</span>}
+        {error && <span style={{ color: 'var(--danger)' }}>{error}</span>}
       </div>
 
       <div style={{ flex: 1, cursor: brushCursor }}>
@@ -245,7 +247,7 @@ export default function SculptView({ node, onClose }: SculptViewProps) {
             <ambientLight intensity={0.9} />
             <directionalLight position={[3, 5, 4]} intensity={1.6} />
             <directionalLight position={[-3, 2, -4]} intensity={0.5} />
-            <gridHelper args={[6, 12, '#3a4a66', '#2a3850']} />
+            <gridHelper args={[6, 12, '#3a3b42', '#26272c']} />
             <mesh
               ref={(m) => {
                 meshRef.current = m;
@@ -260,7 +262,7 @@ export default function SculptView({ node, onClose }: SculptViewProps) {
             <OrbitControls makeDefault enabled={rotateMode || !geometry} enablePan={rotateMode} target={[0, 0.8, 0]} />
           </Canvas>
         ) : (
-          <div style={{ color: '#dbe6f5', padding: 24 }}>{error ?? '読み込み中…'}</div>
+          <div style={{ color: 'var(--text)', padding: 24 }}>{error ?? '読み込み中…'}</div>
         )}
       </div>
     </div>
@@ -269,21 +271,18 @@ export default function SculptView({ node, onClose }: SculptViewProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   overlay: {
-    position: 'fixed', inset: 0, zIndex: 100, background: '#141c2c',
+    position: 'fixed', inset: 0, zIndex: 100, background: 'var(--bg)',
     display: 'flex', flexDirection: 'column',
   },
   header: {
     display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
-    color: '#eef3fa', borderBottom: '1px solid #2a3850',
+    color: 'var(--text)', borderBottom: '1px solid var(--line)', flexWrap: 'wrap',
   },
   toolbar: {
     display: 'flex', alignItems: 'center', gap: 18, padding: '8px 14px',
-    color: '#dbe6f5', fontSize: 13, borderBottom: '1px solid #2a3850', flexWrap: 'wrap',
+    color: 'var(--text)', fontSize: 13, borderBottom: '1px solid var(--line)', flexWrap: 'wrap',
   },
-  btn: {
-    background: '#243350', color: '#e6eefb', border: '1px solid #3a4f7a',
-    borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 13,
-  },
-  primary: { background: '#2f6fd0', borderColor: '#2f6fd0' },
-  select: { marginLeft: 6, background: '#0f1626', color: '#e6eefb', border: '1px solid #3a4f7a', borderRadius: 4 },
+  btn: { ...themeBtn, padding: '6px 12px' },
+  primary: { background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--accent-ink)' },
+  select: { marginLeft: 6, background: 'var(--inset)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 'var(--radius)', padding: '3px 6px' },
 };
