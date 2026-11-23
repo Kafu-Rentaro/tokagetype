@@ -3,9 +3,16 @@
 //! - [`ProjectDoc`] を中心とする文書モデル（serde、Web 版と同一の JSON 構造）
 //! - 読み込み（[`ProjectDoc::from_json`]）→ 検証（[`validate_doc`]）→ 再シリアライズ（[`ProjectDoc::to_json`]）
 
+pub mod archive;
+pub mod edit;
+pub mod factory;
+pub mod history;
 pub mod model;
 pub mod validate;
 
+pub use archive::{read_tokage, write_tokage, ArchiveError, AssetBlobs};
+pub use factory::{create_frame, create_node, create_project, default_action, new_id, NewNodeKind};
+pub use history::History;
 pub use model::{
     Action, AssetKind, AssetRef, ButtonNode, CameraDef, Frame, Node, NodeBase, ProjectDoc,
     RectNode, TextAlign, TextNode, View3DNode,

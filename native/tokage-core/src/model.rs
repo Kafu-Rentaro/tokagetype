@@ -128,6 +128,14 @@ impl Node {
             Node::View3d(n) => &n.base,
         }
     }
+    pub fn base_mut(&mut self) -> &mut NodeBase {
+        match self {
+            Node::Rect(n) => &mut n.base,
+            Node::Text(n) => &mut n.base,
+            Node::Button(n) => &mut n.base,
+            Node::View3d(n) => &mut n.base,
+        }
+    }
     pub fn kind_name(&self) -> &'static str {
         match self {
             Node::Rect(_) => "rect",
