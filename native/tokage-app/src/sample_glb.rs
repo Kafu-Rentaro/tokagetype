@@ -100,6 +100,120 @@ fn make_cylinder_z(r: f32, h: f32, segments: usize, material: usize) -> Part {
     }
 }
 
+/// スカルプト用: 細分化した球プリミティブの GLB を生成する。
+/// Web 版 `buildSphereGLB`（SphereGeometry(0.8, 96, 72) を y+0.8 へ移動）に対応する。
+pub fn build_sphere_glb() -> Vec<u8> {
+    let radius = 0.8f32;
+    let (wseg, hseg) = (96usize, 72usize);
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    for iy in 0..=hseg {
+        let phi = std::f32::consts::PI * (iy as f32 / hseg as f32);
+        for ix in 0..=wseg {
+            let theta = std::f32::consts::TAU * (ix as f32 / wseg as f32);
+            let n = [
+                phi.sin() * theta.cos(),
+                phi.cos(),
+                phi.sin() * theta.sin(),
+            ];
+            normals.push(n);
+            positions.push([radius * n[0], radius * n[1] + 0.8, radius * n[2]]);
+        }
+    }
+    let stride = wseg + 1;
+    let mut indices: Vec<u32> = Vec::new();
+    for iy in 0..hseg {
+        for ix in 0..wseg {
+            let a = (iy * stride + ix) as u32;
+            let b = a + 1;
+            let c = a + stride as u32;
+            let d = c + 1;
+            // 外向き（CCW）に揃える
+            indices.extend_from_slice(&[a, b, c, b, d, c]);
+        }
+    }
+
+    let pos_bytes: Vec<u8> = positions
+        .iter()
+        .flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes()))
+        .collect();
+    let nor_bytes: Vec<u8> = normals
+        .iter()
+        .flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes()))
+        .collect();
+    let idx_bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+
+    let mut bin: Vec<u8> = Vec::new();
+    let mut buffer_views: Vec<serde_json::Value> = Vec::new();
+    let mut add_view = |bin: &mut Vec<u8>, data: &[u8], target: u64| -> usize {
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let offset = bin.len();
+        bin.extend_from_slice(data);
+        buffer_views.push(serde_json::json!({
+            "buffer": 0, "byteOffset": offset, "byteLength": data.len(), "target": target,
+        }));
+        buffer_views.len() - 1
+    };
+    let pos_view = add_view(&mut bin, &pos_bytes, 34962);
+    let nor_view = add_view(&mut bin, &nor_bytes, 34962);
+    let idx_view = add_view(&mut bin, &idx_bytes, 34963);
+
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for p in &positions {
+        for i in 0..3 {
+            min[i] = min[i].min(p[i]);
+            max[i] = max[i].max(p[i]);
+        }
+    }
+    let json = serde_json::json!({
+        "asset": { "version": "2.0", "generator": "tokagetype native sculpt sphere" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0] }],
+        "nodes": [{ "mesh": 0, "name": "SculptSphere" }],
+        "meshes": [{
+            "name": "SculptSphere",
+            "primitives": [{
+                "attributes": { "POSITION": 0, "NORMAL": 1 },
+                "indices": 2, "material": 0, "mode": 4,
+            }],
+        }],
+        "materials": [
+            { "name": "sculpt", "pbrMetallicRoughness": { "baseColorFactor": [0.722, 0.769, 0.831, 1.0], "metallicFactor": 0.05, "roughnessFactor": 0.6 } },
+        ],
+        "accessors": [
+            { "bufferView": pos_view, "componentType": 5126, "count": positions.len(), "type": "VEC3", "min": min, "max": max },
+            { "bufferView": nor_view, "componentType": 5126, "count": normals.len(), "type": "VEC3" },
+            { "bufferView": idx_view, "componentType": 5125, "count": indices.len(), "type": "SCALAR" },
+        ],
+        "bufferViews": buffer_views,
+        "buffers": [{ "byteLength": bin.len() }],
+    });
+
+    let mut json_bytes = serde_json::to_vec(&json).unwrap_or_default();
+    while json_bytes.len() % 4 != 0 {
+        json_bytes.push(b' ');
+    }
+    let mut bin_padded = bin;
+    while bin_padded.len() % 4 != 0 {
+        bin_padded.push(0);
+    }
+    let total = 12 + 8 + json_bytes.len() + 8 + bin_padded.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(b"glTF");
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&(total as u32).to_le_bytes());
+    out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"JSON");
+    out.extend_from_slice(&json_bytes);
+    out.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"BIN\0");
+    out.extend_from_slice(&bin_padded);
+    out
+}
+
 /// サンプルスマホの GLB バイト列を生成する。
 pub fn build_sample_phone_glb() -> Vec<u8> {
     let parts = vec![

@@ -85,6 +85,102 @@ impl Mat4 {
         }
     }
 
+    /// 一般の 4x4 逆行列（随伴行列法）。特異な場合は単位行列を返す。
+    pub fn inverse(&self) -> Mat4 {
+        let m = &self.0;
+        let inv = |i: usize| m[i];
+        let mut out = [0.0f32; 16];
+        out[0] = inv(5) * inv(10) * inv(15) - inv(5) * inv(11) * inv(14)
+            - inv(9) * inv(6) * inv(15)
+            + inv(9) * inv(7) * inv(14)
+            + inv(13) * inv(6) * inv(11)
+            - inv(13) * inv(7) * inv(10);
+        out[4] = -inv(4) * inv(10) * inv(15) + inv(4) * inv(11) * inv(14)
+            + inv(8) * inv(6) * inv(15)
+            - inv(8) * inv(7) * inv(14)
+            - inv(12) * inv(6) * inv(11)
+            + inv(12) * inv(7) * inv(10);
+        out[8] = inv(4) * inv(9) * inv(15) - inv(4) * inv(11) * inv(13)
+            - inv(8) * inv(5) * inv(15)
+            + inv(8) * inv(7) * inv(13)
+            + inv(12) * inv(5) * inv(11)
+            - inv(12) * inv(7) * inv(9);
+        out[12] = -inv(4) * inv(9) * inv(14) + inv(4) * inv(10) * inv(13)
+            + inv(8) * inv(5) * inv(14)
+            - inv(8) * inv(6) * inv(13)
+            - inv(12) * inv(5) * inv(10)
+            + inv(12) * inv(6) * inv(9);
+        out[1] = -inv(1) * inv(10) * inv(15) + inv(1) * inv(11) * inv(14)
+            + inv(9) * inv(2) * inv(15)
+            - inv(9) * inv(3) * inv(14)
+            - inv(13) * inv(2) * inv(11)
+            + inv(13) * inv(3) * inv(10);
+        out[5] = inv(0) * inv(10) * inv(15) - inv(0) * inv(11) * inv(14)
+            - inv(8) * inv(2) * inv(15)
+            + inv(8) * inv(3) * inv(14)
+            + inv(12) * inv(2) * inv(11)
+            - inv(12) * inv(3) * inv(10);
+        out[9] = -inv(0) * inv(9) * inv(15) + inv(0) * inv(11) * inv(13)
+            + inv(8) * inv(1) * inv(15)
+            - inv(8) * inv(3) * inv(13)
+            - inv(12) * inv(1) * inv(11)
+            + inv(12) * inv(3) * inv(9);
+        out[13] = inv(0) * inv(9) * inv(14) - inv(0) * inv(10) * inv(13)
+            - inv(8) * inv(1) * inv(14)
+            + inv(8) * inv(2) * inv(13)
+            + inv(12) * inv(1) * inv(10)
+            - inv(12) * inv(2) * inv(9);
+        out[2] = inv(1) * inv(6) * inv(15) - inv(1) * inv(7) * inv(14)
+            - inv(5) * inv(2) * inv(15)
+            + inv(5) * inv(3) * inv(14)
+            + inv(13) * inv(2) * inv(7)
+            - inv(13) * inv(3) * inv(6);
+        out[6] = -inv(0) * inv(6) * inv(15) + inv(0) * inv(7) * inv(14)
+            + inv(4) * inv(2) * inv(15)
+            - inv(4) * inv(3) * inv(14)
+            - inv(12) * inv(2) * inv(7)
+            + inv(12) * inv(3) * inv(6);
+        out[10] = inv(0) * inv(5) * inv(15) - inv(0) * inv(7) * inv(13)
+            - inv(4) * inv(1) * inv(15)
+            + inv(4) * inv(3) * inv(13)
+            + inv(12) * inv(1) * inv(7)
+            - inv(12) * inv(3) * inv(5);
+        out[14] = -inv(0) * inv(5) * inv(14) + inv(0) * inv(6) * inv(13)
+            + inv(4) * inv(1) * inv(14)
+            - inv(4) * inv(2) * inv(13)
+            - inv(12) * inv(1) * inv(6)
+            + inv(12) * inv(2) * inv(5);
+        out[3] = -inv(1) * inv(6) * inv(11) + inv(1) * inv(7) * inv(10)
+            + inv(5) * inv(2) * inv(11)
+            - inv(5) * inv(3) * inv(10)
+            - inv(9) * inv(2) * inv(7)
+            + inv(9) * inv(3) * inv(6);
+        out[7] = inv(0) * inv(6) * inv(11) - inv(0) * inv(7) * inv(10)
+            - inv(4) * inv(2) * inv(11)
+            + inv(4) * inv(3) * inv(10)
+            + inv(8) * inv(2) * inv(7)
+            - inv(8) * inv(3) * inv(6);
+        out[11] = -inv(0) * inv(5) * inv(11) + inv(0) * inv(7) * inv(9)
+            + inv(4) * inv(1) * inv(11)
+            - inv(4) * inv(3) * inv(9)
+            - inv(8) * inv(1) * inv(7)
+            + inv(8) * inv(3) * inv(5);
+        out[15] = inv(0) * inv(5) * inv(10) - inv(0) * inv(6) * inv(9)
+            - inv(4) * inv(1) * inv(10)
+            + inv(4) * inv(2) * inv(9)
+            + inv(8) * inv(1) * inv(6)
+            - inv(8) * inv(2) * inv(5);
+        let det = inv(0) * out[0] + inv(1) * out[4] + inv(2) * out[8] + inv(3) * out[12];
+        if det.abs() < 1e-12 {
+            return Mat4::identity();
+        }
+        let inv_det = 1.0 / det;
+        for v in &mut out {
+            *v *= inv_det;
+        }
+        Mat4(out)
+    }
+
     /// 方向ベクトル（平行移動なし）。正規化は呼び出し側で行う。
     pub fn transform_dir(&self, d: Vec3) -> Vec3 {
         let m = &self.0;

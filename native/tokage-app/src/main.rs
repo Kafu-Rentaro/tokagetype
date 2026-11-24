@@ -5,17 +5,20 @@
 //! Undo/Redo、JSON / .tokage の読み書き、再生モード（Action 実行）を持つ。
 //! フェーズ5: view3d の実描画（wgpu 自前レンダラ + GLB 読込 + カメラプリセット /
 //! オービット / 自動回転、再生モードの setCamera 反映）。
+//! フェーズ6: スカルプト（pull / push / smooth ブラシ、ストローク単位 Undo、
+//! GLB 書き戻しによるアセット置き換え）。Web 版 `src/sculpt/` に対応。
 
 mod glb;
 mod math3d;
 mod render3d;
 mod sample_glb;
+mod sculpt;
 
 use eframe::egui;
 use egui::{Color32, FontId, Pos2, Rect, Rounding, Stroke, Vec2};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokage_core::{
     edit, validate_doc, Action, AssetBlobs, Frame, History, Level, Node, ProjectDoc, View3DNode,
 };
@@ -137,9 +140,78 @@ impl Default for OrbitState {
     }
 }
 
+/// スカルプトモードの状態（Web 版 SculptView に対応）。文書とは別に保持し、
+/// 「適用して保存」で初めてアセット実体と文書へ反映する。
+struct SculptState {
+    frame_id: String,
+    node_id: String,
+    node_name: String,
+    /// 元のアセット ID（未割当だった場合は None → 適用時に新規アセットを作る）
+    asset_id: Option<String>,
+    /// 書き戻しのベースになる GLB（未割当・実体なしの場合は生成した球）
+    source_bytes: Vec<u8>,
+    bytes_arc: Arc<Vec<u8>>,
+    target: sculpt::SculptTarget,
+    dyn_prim: Arc<Mutex<render3d::DynPrim0>>,
+    model_key: String,
+    brush: sculpt::BrushMode,
+    radius: f32,
+    strength: f32,
+    rotate_mode: bool,
+    yaw: f32,
+    pitch: f32,
+    dist: f32,
+    brushing: bool,
+    orbiting: bool,
+    undo: Vec<Vec<math3d::Vec3>>,
+    redo: Vec<Vec<math3d::Vec3>>,
+    dirty: bool,
+    hover: Option<math3d::Vec3>,
+}
+
+impl SculptState {
+    /// 変形結果をレンダラの動的頂点へ反映する。
+    fn sync_dyn(&mut self) {
+        if let Ok(mut d) = self.dyn_prim.lock() {
+            d.vertices = self.target.vertices();
+            d.version += 1;
+        }
+    }
+
+    /// 1ストローク = 1 Undo（ストローク開始時点の頂点スナップショットで戻す）。
+    fn undo(&mut self) {
+        if let Some(prev) = self.undo.pop() {
+            let cur = self.target.positions.clone();
+            self.redo.push(cur);
+            self.target.set_positions(prev);
+            self.sync_dyn();
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(next) = self.redo.pop() {
+            let cur = self.target.positions.clone();
+            self.undo.push(cur);
+            self.target.set_positions(next);
+            self.sync_dyn();
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SculptAction {
+    None,
+    Close,
+    Apply,
+}
+
 struct TokageApp {
     history: History,
     assets: AssetBlobs,
+    /// アセット実体だけが変わった（スカルプト適用など）場合の未保存フラグ。
+    /// 文書スナップショット比較では検出できないため別に持つ。
+    assets_dirty: bool,
+    sculpt: Option<SculptState>,
     current_path: Option<PathBuf>,
     source_label: String,
     saved_snapshot: ProjectDoc,
@@ -173,6 +245,8 @@ impl Default for TokageApp {
         let mut app = TokageApp {
             history: History::new(doc.clone()),
             assets: AssetBlobs::new(),
+            assets_dirty: false,
+            sculpt: None,
             current_path: None,
             source_label: String::new(),
             saved_snapshot: doc,
@@ -231,7 +305,7 @@ impl TokageApp {
     }
 
     fn is_dirty(&self) -> bool {
-        self.doc() != &self.saved_snapshot
+        self.doc() != &self.saved_snapshot || self.assets_dirty
     }
 
     fn refresh_validation_status(&mut self) {
@@ -315,6 +389,8 @@ impl TokageApp {
         let path_for_assets = path.clone();
         self.history.reset(doc.clone());
         self.assets = assets;
+        self.assets_dirty = false;
+        self.sculpt = None;
         self.saved_snapshot = doc;
         self.current_path = path;
         self.source_label = label;
@@ -510,6 +586,7 @@ impl TokageApp {
             std::fs::write(path, json).map_err(|e| e.to_string())?;
         }
         self.saved_snapshot = self.doc().clone();
+        self.assets_dirty = false;
         self.current_path = Some(path.clone());
         self.source_label = path.display().to_string();
         Ok(())
@@ -525,6 +602,122 @@ impl TokageApp {
                 self.status = "保存先が未設定です。「名前を付けて保存」のパスを入力してください".into()
             }
         }
+    }
+
+    // ---- スカルプト ----
+
+    /// スカルプトモードへ入る。対象はノードに割り当てられた GLB の最初のメッシュ。
+    /// アセット未割当・実体なしの場合は Web 版と同じく球プリミティブを使う。
+    fn open_sculpt(&mut self, frame_id: &str, node: &View3DNode) {
+        self.end_edit();
+        let bytes = match &node.asset_id {
+            Some(aid) => match self.assets.get(aid) {
+                Some(b) => b.clone(),
+                None => sample_glb::build_sphere_glb(),
+            },
+            None => sample_glb::build_sphere_glb(),
+        };
+        match sculpt::extract_target(&bytes) {
+            Ok(target) => {
+                let dyn_prim = Arc::new(Mutex::new(render3d::DynPrim0 {
+                    version: 1,
+                    vertices: target.vertices(),
+                }));
+                let model_key = match &node.asset_id {
+                    Some(aid) => self
+                        .asset_arcs
+                        .get(aid)
+                        .map(|(k, _)| format!("sculpt:{k}"))
+                        .unwrap_or_else(|| format!("sculpt:{aid}")),
+                    None => format!("sculpt:sphere:{}", node.base.id),
+                };
+                self.sculpt = Some(SculptState {
+                    frame_id: frame_id.to_string(),
+                    node_id: node.base.id.clone(),
+                    node_name: node.base.name.clone(),
+                    asset_id: node.asset_id.clone(),
+                    bytes_arc: Arc::new(bytes.clone()),
+                    source_bytes: bytes,
+                    target,
+                    dyn_prim,
+                    model_key,
+                    brush: sculpt::BrushMode::Pull,
+                    radius: 0.25,
+                    strength: 0.6,
+                    rotate_mode: false,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    dist: 1.0,
+                    brushing: false,
+                    orbiting: false,
+                    undo: Vec::new(),
+                    redo: Vec::new(),
+                    dirty: false,
+                    hover: None,
+                });
+                self.status = "スカルプトモード（対象: 最初のメッシュ）".into();
+            }
+            Err(e) => {
+                self.status = format!("スカルプトを開始できません: {e}");
+            }
+        }
+    }
+
+    /// 「適用して保存」: 変形を GLB へ書き戻してアセット実体を差し替える。
+    /// 文書側の変更（新規アセット作成・名前への (sculpt) 付与・ノードへの割当）は
+    /// 通常の履歴つき編集として記録する（Web 版 applyAndSave に対応）。
+    fn finish_sculpt_apply(&mut self, st: SculptState) {
+        let new_bytes = match sculpt::write_back(&st.source_bytes, &st.target) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("スカルプトの書き戻しに失敗: {e}");
+                self.sculpt = Some(st);
+                return;
+            }
+        };
+        match &st.asset_id {
+            Some(aid) => {
+                let aid = aid.clone();
+                self.assets.insert(aid.clone(), new_bytes);
+                self.assets_dirty = true;
+                self.mutate(|doc| {
+                    if let Some(a) = doc.assets.iter_mut().find(|a| a.id == aid) {
+                        if !a.name.contains("(sculpt)") {
+                            a.name = format!("{} (sculpt)", a.name);
+                        }
+                    }
+                });
+            }
+            None => {
+                let aid = tokage_core::new_id("asset");
+                self.assets.insert(aid.clone(), new_bytes);
+                self.assets_dirty = true;
+                let (fid, nid) = (st.frame_id.clone(), st.node_id.clone());
+                self.mutate(|doc| {
+                    doc.assets.push(tokage_core::AssetRef {
+                        id: aid.clone(),
+                        name: "sculpted.glb".into(),
+                        kind: tokage_core::AssetKind::Glb,
+                    });
+                    if let Some(Node::View3d(v)) = edit::node_mut(doc, &fid, &nid) {
+                        v.asset_id = Some(aid.clone());
+                    }
+                });
+            }
+        }
+        self.refresh_asset_arcs();
+        let note = match &self.current_path {
+            Some(p)
+                if p
+                    .extension()
+                    .map(|e| e.eq_ignore_ascii_case("tokage"))
+                    .unwrap_or(false) =>
+            {
+                ""
+            }
+            _ => "（実体を残すには .tokage で保存してください）",
+        };
+        self.status = format!("スカルプトを適用しました（GLB 化してアセットを置き換え）{note}");
     }
 
     // ---- 再生モード ----
@@ -665,6 +858,11 @@ impl eframe::App for TokageApp {
         // 3D 描画用に wgpu サーフェス形式を一度だけ取得する
         if self.surface_format.is_none() {
             self.surface_format = frame.wgpu_render_state().map(|s| s.target_format);
+        }
+        // スカルプトモード中は専用 UI のみ（モーダル。Web 版の全画面オーバーレイに対応）
+        if self.sculpt.is_some() {
+            self.sculpt_ui(ctx);
+            return;
         }
         // 連続編集の終了検知: ポインタを離し、入力欄にもフォーカスが無い時点で確定する
         if self.edit_base.is_some()
@@ -1298,6 +1496,12 @@ impl TokageApp {
                 {
                     self.orbit_node = if orbit_on { Some(nid.clone()) } else { None };
                 }
+                ui.horizontal(|ui| {
+                    if ui.button("スカルプト…").clicked() {
+                        self.open_sculpt(frame_id, n);
+                    }
+                    ui.label("（対象: GLB の最初のメッシュ）");
+                });
                 ui.label("カメラプリセット:");
                 for c in &n.cameras {
                     ui.monospace(format!(
@@ -1466,7 +1670,235 @@ impl TokageApp {
     }
 }
 
+/// スクリーン座標 → ワールド空間のレイ（原点 = カメラ位置、方向は正規化済み）。
+fn sculpt_ray(
+    rect: Rect,
+    p: Pos2,
+    eye: math3d::Vec3,
+    view: &math3d::Mat4,
+    proj: &math3d::Mat4,
+) -> (math3d::Vec3, math3d::Vec3) {
+    let inv = proj.mul(view).inverse();
+    let ndc_x = ((p.x - rect.min.x) / rect.width().max(1.0)) * 2.0 - 1.0;
+    let ndc_y = 1.0 - ((p.y - rect.min.y) / rect.height().max(1.0)) * 2.0;
+    let near = inv.transform_point([ndc_x, ndc_y, 0.0]);
+    let far = inv.transform_point([ndc_x, ndc_y, 1.0]);
+    (eye, math3d::v_norm(math3d::v_sub(far, near)))
+}
+
+/// ワールド座標 → スクリーン座標（ブラシカーソル表示用）。
+fn project_to_screen(mvp: &math3d::Mat4, rect: Rect, p: math3d::Vec3) -> Option<Pos2> {
+    let ndc = mvp.transform_point(p);
+    if !ndc[0].is_finite() || !ndc[1].is_finite() {
+        return None;
+    }
+    Some(Pos2::new(
+        rect.min.x + (ndc[0] + 1.0) * 0.5 * rect.width(),
+        rect.min.y + (1.0 - ndc[1]) * 0.5 * rect.height(),
+    ))
+}
+
 impl TokageApp {
+    /// スカルプトモードの UI（ヘッダー + ツールバー + 3D キャンバス）。
+    fn sculpt_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut st) = self.sculpt.take() else {
+            return;
+        };
+        let mut action = SculptAction::None;
+        // スカルプト内の Undo/Redo（ストローク単位）
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && !i.modifiers.shift {
+                st.undo();
+            } else if (i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && i.modifiers.shift)
+                || (i.key_pressed(egui::Key::Y) && i.modifiers.ctrl)
+            {
+                st.redo();
+            }
+        });
+        egui::TopBottomPanel::top("sculpt_header").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong(format!("スカルプト: {}", st.node_name));
+                ui.label("頂点数は固定です（リメッシュなし）。1ストローク = 1 Undo。");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(st.dirty, egui::Button::new("適用して保存（GLB化）"))
+                        .clicked()
+                    {
+                        action = SculptAction::Apply;
+                    }
+                    if ui.button("閉じる").clicked() {
+                        action = SculptAction::Close;
+                    }
+                    ui.add_enabled_ui(!st.redo.is_empty(), |ui| {
+                        if ui.button("↪ Redo").clicked() {
+                            st.redo();
+                        }
+                    });
+                    ui.add_enabled_ui(!st.undo.is_empty(), |ui| {
+                        if ui.button("↩ Undo").clicked() {
+                            st.undo();
+                        }
+                    });
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label("ブラシ:");
+                for (label, mode) in [
+                    ("pull（引き出す）", sculpt::BrushMode::Pull),
+                    ("push（押し込む）", sculpt::BrushMode::Push),
+                    ("smooth（滑らか）", sculpt::BrushMode::Smooth),
+                ] {
+                    ui.selectable_value(&mut st.brush, mode, label);
+                }
+                ui.separator();
+                ui.label(format!("半径 {:.2}", st.radius));
+                ui.add(egui::Slider::new(&mut st.radius, 0.05..=0.8));
+                ui.label(format!("強さ {:.2}", st.strength));
+                ui.add(egui::Slider::new(&mut st.strength, 0.05..=1.5));
+                ui.separator();
+                ui.checkbox(&mut st.rotate_mode, "視点回転モード（ブラシ無効）");
+            });
+            if let Some(err) = self
+                .render_errors
+                .lock()
+                .ok()
+                .and_then(|m| m.get(&st.model_key).cloned())
+            {
+                ui.colored_label(
+                    Color32::from_rgb(0xd0, 0x30, 0x30),
+                    format!("3D 読み込み失敗: {err}"),
+                );
+            }
+        });
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.sculpt_canvas(ui, &mut st);
+        });
+        match action {
+            SculptAction::None => self.sculpt = Some(st),
+            SculptAction::Close => {
+                self.status = "スカルプトを閉じました（未適用の変更は破棄）".into();
+            }
+            SculptAction::Apply => self.finish_sculpt_apply(st),
+        }
+    }
+
+    /// スカルプト用 3D キャンバス。Web 版 SculptView と同じ初期カメラ
+    /// （position [0, 0.9, 3.2] / target [0, 0.8, 0] / fov 40）を使う。
+    fn sculpt_canvas(&self, ui: &mut egui::Ui, st: &mut SculptState) {
+        let avail = ui.available_size();
+        let (resp, painter) = ui.allocate_painter(avail, egui::Sense::click_and_drag());
+        let rect = resp.rect;
+        painter.rect_filled(rect, Rounding::ZERO, Color32::from_rgb(0xdd, 0xe1, 0xe6));
+
+        let target3: math3d::Vec3 = [0.0, 0.8, 0.0];
+        let eye0: math3d::Vec3 = [0.0, 0.9, 3.2];
+        let eye = math3d::apply_orbit(target3, eye0, st.yaw, st.pitch, st.dist);
+        let aspect = (rect.width() / rect.height().max(1.0)).max(0.05);
+        let view = math3d::look_at(eye, target3, [0.0, 1.0, 0.0]);
+        let proj = math3d::perspective(40f32.to_radians(), aspect, 0.01, 100.0);
+        let mvp = proj.mul(&view);
+
+        if let Some(surface_format) = self.surface_format {
+            let ppp = ui.ctx().pixels_per_point();
+            painter.add(egui_wgpu::Callback::new_paint_callback(
+                rect,
+                render3d::View3dCallback {
+                    target_key: "sculpt".into(),
+                    model_key: st.model_key.clone(),
+                    bytes: st.bytes_arc.clone(),
+                    mvp,
+                    size_px: [
+                        (rect.width() * ppp).round() as u32,
+                        (rect.height() * ppp).round() as u32,
+                    ],
+                    surface_format,
+                    errors: self.render_errors.clone(),
+                    dyn_prim0: Some(st.dyn_prim.clone()),
+                },
+            ));
+        }
+
+        // ポインタ → レイ → 対象メッシュへのヒット
+        // （interact_pointer_pos はドラッグ中のみ。ホバー時は hover_pos を使う）
+        let pointer = resp.interact_pointer_pos().or_else(|| resp.hover_pos());
+        let hit = pointer.and_then(|p| {
+            let (origin, dir) = sculpt_ray(rect, p, eye, &view, &proj);
+            sculpt::raycast(&st.target, origin, dir)
+        });
+        if st.rotate_mode {
+            st.hover = None;
+        } else {
+            st.hover = hit.as_ref().map(|h| h.point);
+        }
+
+        if resp.drag_started() {
+            if st.rotate_mode {
+                st.orbiting = true;
+            } else if let Some(h) = &hit {
+                // ストローク開始: 開始時点の頂点をスナップショット（1ストローク = 1 Undo）
+                st.undo.push(st.target.positions.clone());
+                if st.undo.len() > 30 {
+                    st.undo.remove(0);
+                }
+                st.redo.clear();
+                st.brushing = true;
+                sculpt::apply_brush(&mut st.target, h.point, st.radius, st.strength, st.brush);
+                st.sync_dyn();
+                st.dirty = true;
+            }
+        }
+        if resp.dragged() {
+            if st.orbiting {
+                let delta = resp.drag_delta();
+                st.yaw -= delta.x * 0.008;
+                st.pitch = (st.pitch - delta.y * 0.008).clamp(-1.35, 1.35);
+            } else if st.brushing {
+                if let Some(h) = &hit {
+                    // Web 版と同じく移動中は強さ半分で連続適用
+                    sculpt::apply_brush(
+                        &mut st.target,
+                        h.point,
+                        st.radius,
+                        st.strength * 0.5,
+                        st.brush,
+                    );
+                    st.sync_dyn();
+                    st.dirty = true;
+                }
+            }
+        }
+        if resp.drag_stopped() {
+            st.brushing = false;
+            st.orbiting = false;
+        }
+        // ホイールズーム
+        if let Some(p) = pointer {
+            if rect.contains(p) {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll.abs() > 0.01 {
+                    st.dist = (st.dist * (1.0 - scroll * 0.002)).clamp(0.3, 3.0);
+                }
+            }
+        }
+
+        // ブラシカーソル（ヒット点と半径）
+        if let Some(hp) = st.hover {
+            let f = math3d::v_norm(math3d::v_sub(target3, eye));
+            let right = math3d::v_norm(math3d::v_cross(f, [0.0, 1.0, 0.0]));
+            let c = project_to_screen(&mvp, rect, hp);
+            let e = project_to_screen(
+                &mvp,
+                rect,
+                math3d::v_add(hp, math3d::v_scale(right, st.radius)),
+            );
+            if let (Some(c), Some(e)) = (c, e) {
+                let r_px = (e - c).length().max(2.0);
+                painter.circle_stroke(c, r_px, Stroke::new(1.5_f32, ACCENT));
+                painter.circle_filled(c, 2.5, ACCENT);
+            }
+        }
+    }
+
     /// 中央キャンバス。編集モードでは選択/移動/リサイズ、再生モードではクリックで Action 実行。
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let frame = if self.mode == Mode::Play {
@@ -1798,6 +2230,7 @@ impl TokageApp {
                                             ],
                                             surface_format,
                                             errors: self.render_errors.clone(),
+                                            dyn_prim0: None,
                                         },
                                     ));
                                 } else {

@@ -58,6 +58,14 @@ fn upload_texture(
 /// アセットキー（asset_id + 内容ハッシュ）→ 読込エラー。アプリ側の表示切替に使う。
 pub type RenderErrors = Arc<Mutex<HashMap<String, String>>>;
 
+/// スカルプト用: プリミティブ 0 の動的頂点差し替え。
+/// version が変わるたびに、対応する GpuModel の頂点バッファへ書き直す。
+/// 頂点数は固定（スカルプトはトポロジを変えない）。
+pub struct DynPrim0 {
+    pub version: u64,
+    pub vertices: Vec<Vertex>,
+}
+
 pub struct View3dCallback {
     /// ノード単位の描画先キー（ノード ID）
     pub target_key: String,
@@ -69,17 +77,22 @@ pub struct View3dCallback {
     pub size_px: [u32; 2],
     pub surface_format: wgpu::TextureFormat,
     pub errors: RenderErrors,
+    /// スカルプト編集中のプリミティブ 0 頂点差し替え（通常表示では None）
+    pub dyn_prim0: Option<Arc<Mutex<DynPrim0>>>,
 }
 
 struct GpuPrimitive {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+    vertex_count: u32,
     bind_group: wgpu::BindGroup,
 }
 
 struct GpuModel {
     primitives: Vec<GpuPrimitive>,
+    /// 適用済みの DynPrim0 バージョン
+    dyn_version: u64,
 }
 
 struct Target {
@@ -491,7 +504,8 @@ impl Resources {
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("tokage-vb"),
                 contents: bytemuck::cast_slice(&prim.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                // COPY_DST: スカルプト時の動的頂点差し替えに使う
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
             let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("tokage-ib"),
@@ -557,10 +571,14 @@ impl Resources {
                 vertex_buffer,
                 index_buffer,
                 index_count: prim.indices.len() as u32,
+                vertex_count: prim.vertices.len() as u32,
                 bind_group,
             });
         }
-        GpuModel { primitives }
+        GpuModel {
+            primitives,
+            dyn_version: 0,
+        }
     }
 }
 
@@ -580,6 +598,26 @@ impl egui_wgpu::CallbackTrait for View3dCallback {
         let resources: &mut Resources = callback_resources.get_mut().unwrap();
         resources.ensure_target(device, &self.target_key, self.size_px[0], self.size_px[1]);
         resources.ensure_model(device, queue, &self.model_key, &self.bytes, &self.errors);
+
+        // スカルプト中: バージョンが進んでいたらプリミティブ 0 の頂点を差し替える
+        if let Some(dyn_arc) = &self.dyn_prim0 {
+            if let Some(Ok(model)) = resources.models.get_mut(&self.model_key) {
+                if let Ok(dyn_data) = dyn_arc.lock() {
+                    if dyn_data.version != model.dyn_version {
+                        if let Some(prim) = model.primitives.first() {
+                            if prim.vertex_count as usize == dyn_data.vertices.len() {
+                                queue.write_buffer(
+                                    &prim.vertex_buffer,
+                                    0,
+                                    bytemuck::cast_slice(&dyn_data.vertices),
+                                );
+                            }
+                        }
+                        model.dyn_version = dyn_data.version;
+                    }
+                }
+            }
+        }
 
         let target = resources.targets.get(&self.target_key).unwrap();
         queue.write_buffer(

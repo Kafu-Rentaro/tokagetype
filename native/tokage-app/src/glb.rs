@@ -194,7 +194,7 @@ fn read_primitive(
 }
 
 /// 法線が無い場合に面法線の面積加重平均でスムーズ法線を作る。
-fn compute_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+pub(crate) fn compute_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
     let mut normals = vec![[0.0f32; 3]; positions.len()];
     for tri in indices.chunks_exact(3) {
         let (a, b, c) = (
