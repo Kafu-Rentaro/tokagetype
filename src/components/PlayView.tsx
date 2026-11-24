@@ -3,13 +3,11 @@ import type { ButtonNode, Node, RectNode, TextNode, View3DNode } from '../model/
 import { useEditorStore } from '../store/editorStore';
 import { usePlayStore } from '../store/playStore';
 import { useUiStore } from '../store/uiStore';
-import { useAssetUrl } from '../three/assetUrls';
 import View3DCanvas from '../three/View3DCanvas';
 import { IconBack, IconPlay } from '../ui/icons';
 import { btn } from '../ui/theme';
 
 function PlayView3D({ node }: { node: View3DNode }) {
-  const assetUrl = useAssetUrl(node.assetId);
   const override = usePlayStore((s) => s.cameraOverrides[node.id]);
   const nonce = usePlayStore((s) => s.cameraNonce[node.id] ?? 0);
   const cameraId = override ?? node.activeCameraId;
@@ -18,7 +16,7 @@ function PlayView3D({ node }: { node: View3DNode }) {
   return (
     <View3DCanvas
       nodeId={node.id}
-      assetUrl={assetUrl}
+      assetId={node.assetId}
       camera={camera}
       animate
       animKey={nonce}

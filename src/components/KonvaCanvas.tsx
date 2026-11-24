@@ -6,14 +6,12 @@ import { createNode } from '../model/factory';
 import { addNodeToFrame } from '../model/mutate';
 import { useEditorStore } from '../store/editorStore';
 import { useUiStore } from '../store/uiStore';
-import { useAssetUrl } from '../three/assetUrls';
 import View3DCanvas from '../three/View3DCanvas';
 import { addAssetFromFile, assignAssetToNode } from '../lib/assets';
 import { miniBtn, miniBtnActive } from '../ui/theme';
 
 function View3DOverlay({ node, scale }: { node: View3DNode; scale: number }) {
   const orbitNodeId = useEditorStore((s) => s.orbitNodeId);
-  const assetUrl = useAssetUrl(node.assetId);
   const camera = node.cameras.find((c) => c.id === node.activeCameraId) ?? node.cameras[0];
   if (!camera) return null;
   const orbiting = orbitNodeId === node.id;
@@ -33,19 +31,11 @@ function View3DOverlay({ node, scale }: { node: View3DNode; scale: number }) {
     >
       <View3DCanvas
         nodeId={node.id}
-        assetUrl={assetUrl}
+        assetId={node.assetId}
         camera={camera}
         interactive={orbiting}
         autoRotate={node.autoRotate ?? false}
       />
-      {!node.assetId && (
-        <div style={{
-          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#5a5e66', fontSize: 13, pointerEvents: 'none', textAlign: 'center', padding: 8,
-        }}>
-          GLB 未設定<br />（ファイルを選択 / ドロップ）
-        </div>
-      )}
     </div>
   );
 }

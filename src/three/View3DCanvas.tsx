@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useRef } from 'react';
+import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
@@ -6,6 +6,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import type { CameraDef } from '../model/types';
 import { registerCameraSnapshot } from './cameraRegistry';
 import { fitTransform } from './gltfUtils';
+import { useAssetState } from './assetUrls';
 
 interface CameraRigProps {
   nodeId: string;
@@ -95,8 +96,11 @@ function CameraRig({ nodeId, camera, animate, animKey, interactive, autoRotate }
   );
 }
 
-function GLBModel({ url }: { url: string }) {
+function GLBModel({ url, onLoaded }: { url: string; onLoaded: () => void }) {
   const gltf = useGLTF(url);
+  useEffect(() => {
+    onLoaded();
+  }, [onLoaded, url]);
   const { scene, scale, offset } = useMemo(() => {
     const cloned = gltf.scene.clone(true);
     const fit = fitTransform(cloned);
@@ -120,9 +124,33 @@ function PlaceholderModel() {
   );
 }
 
+/**
+ * GLB 読み込みエラーでアプリ全体が落ちないようにするためのエラー境界。
+ * useGLTF は読み込み失敗時に throw する。境界が無いと React ツリー全体が
+ * アンマウントされ白画面になる（フェーズ5監査で確認した不具合）。
+ */
+class ModelErrorBoundary extends Component<
+  { onError: (error: Error) => void; fallback: ReactNode; children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error };
+  }
+
+  componentDidCatch(error: Error): void {
+    this.props.onError(error);
+  }
+
+  render(): ReactNode {
+    return this.state.error ? this.props.fallback : this.props.children;
+  }
+}
+
 export interface View3DCanvasProps {
   nodeId: string;
-  assetUrl: string | null;
+  assetId: string | null;
   camera: CameraDef;
   animate?: boolean;
   animKey?: number;
@@ -130,37 +158,142 @@ export interface View3DCanvasProps {
   autoRotate?: boolean;
 }
 
-/** View3DNode の中身として重ねる R3F キャンバス */
+type LoadPhase = 'idle' | 'loading' | 'ready' | 'error';
+
+/** View3DNode の中身として重ねる R3F キャンバス（読み込み状態の表示とエラー隔離つき） */
 export default function View3DCanvas({
   nodeId,
-  assetUrl,
+  assetId,
   camera,
   animate = false,
   animKey = 0,
   interactive = false,
   autoRotate = false,
 }: View3DCanvasProps) {
+  const asset = useAssetState(assetId);
+  const assetUrl = asset.url;
+  const [phase, setPhase] = useState<LoadPhase>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [retry, setRetry] = useState(0);
+
+  // URL が変わる / 再試行するたびに読み込み状態をリセットする
+  useEffect(() => {
+    setPhase(assetUrl ? 'loading' : 'idle');
+    setErrorMsg('');
+  }, [assetUrl, retry]);
+
+  const handleLoaded = useCallback(() => setPhase('ready'), []);
+  const handleError = useCallback((e: Error) => {
+    setPhase('error');
+    setErrorMsg(e.message || String(e));
+  }, []);
+
+  const doRetry = useCallback(() => {
+    if (assetUrl) useGLTF.clear(assetUrl);
+    setRetry((r) => r + 1);
+  }, [assetUrl]);
+
+  const showLoading =
+    asset.status === 'loading' || (assetUrl !== null && phase === 'loading');
+
   return (
-    <Canvas
-      camera={{ position: camera.position, fov: 40, near: 0.01, far: 100 }}
-      gl={{ antialias: true, alpha: true }}
-      style={{ width: '100%', height: '100%', display: 'block' }}
-    >
-      <ambientLight intensity={0.9} />
-      <directionalLight position={[3, 5, 4]} intensity={1.6} />
-      <directionalLight position={[-3, 2, -4]} intensity={0.5} />
-      <gridHelper args={[6, 12, '#c9d4e6', '#e4eaf4']} position={[0, 0, 0]} />
-      <Suspense fallback={null}>
-        {assetUrl ? <GLBModel url={assetUrl} /> : <PlaceholderModel />}
-      </Suspense>
-      <CameraRig
-        nodeId={nodeId}
-        camera={camera}
-        animate={animate}
-        animKey={animKey}
-        interactive={interactive}
-        autoRotate={autoRotate}
-      />
-    </Canvas>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <Canvas
+        camera={{ position: camera.position, fov: 40, near: 0.01, far: 100 }}
+        gl={{ antialias: true, alpha: true }}
+        style={{ width: '100%', height: '100%', display: 'block' }}
+      >
+        <ambientLight intensity={0.9} />
+        <directionalLight position={[3, 5, 4]} intensity={1.6} />
+        <directionalLight position={[-3, 2, -4]} intensity={0.5} />
+        <gridHelper args={[6, 12, '#c9d4e6', '#e4eaf4']} position={[0, 0, 0]} />
+        <ModelErrorBoundary
+          key={`${assetUrl ?? 'none'}#${retry}`}
+          onError={handleError}
+          fallback={<PlaceholderModel />}
+        >
+          <Suspense fallback={null}>
+            {assetUrl ? (
+              <GLBModel url={assetUrl} onLoaded={handleLoaded} />
+            ) : (
+              <PlaceholderModel />
+            )}
+          </Suspense>
+        </ModelErrorBoundary>
+        <CameraRig
+          nodeId={nodeId}
+          camera={camera}
+          animate={animate}
+          animKey={animKey}
+          interactive={interactive}
+          autoRotate={autoRotate}
+        />
+      </Canvas>
+
+      {asset.status === 'missing' && (
+        <div style={{ ...overlayStyle, background: 'rgba(221,225,230,0.88)' }}>
+          アセットの実体が見つかりません
+          <span style={overlaySubStyle}>ストレージに GLB が保存されていません</span>
+        </div>
+      )}
+      {phase === 'error' && (
+        <div style={{ ...overlayStyle, background: 'rgba(221,225,230,0.88)' }}>
+          GLB の読み込みに失敗しました
+          <span style={overlaySubStyle}>{errorMsg}</span>
+          <button
+            onClick={doRetry}
+            style={{
+              pointerEvents: 'auto',
+              marginTop: 6,
+              background: 'var(--panel, #1e1f23)',
+              color: 'var(--text, #e8e9ec)',
+              border: '1px solid var(--line-strong, #55565e)',
+              borderRadius: 4,
+              padding: '4px 12px',
+              cursor: 'pointer',
+              fontSize: 12,
+              fontFamily: 'inherit',
+            }}
+          >
+            再試行
+          </button>
+        </div>
+      )}
+      {phase !== 'error' && asset.status !== 'missing' && showLoading && (
+        <div style={{ ...overlayStyle, pointerEvents: 'none' }}>読み込み中…</div>
+      )}
+      {!assetId && (
+        <div style={{ ...overlayStyle, pointerEvents: 'none' }}>
+          GLB 未設定
+          <span style={overlaySubStyle}>ファイルを選択 / ドロップで割り当て</span>
+        </div>
+      )}
+    </div>
   );
 }
+
+const overlayStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 2,
+  color: '#5a5e66',
+  fontSize: 13,
+  textAlign: 'center',
+  padding: 8,
+  pointerEvents: 'none',
+};
+
+const overlaySubStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: '#8a8f98',
+  maxWidth: '92%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+};

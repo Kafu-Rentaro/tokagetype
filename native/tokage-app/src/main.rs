@@ -3,13 +3,21 @@
 //! docs/SPEC.md「Native 版」参照。Web 版と文書モデル（doc.json）を共有する。
 //! フェーズ4: 2D 編集（選択/移動/リサイズ/プロパティ編集）、ノード・フレーム操作、
 //! Undo/Redo、JSON / .tokage の読み書き、再生モード（Action 実行）を持つ。
+//! フェーズ5: view3d の実描画（wgpu 自前レンダラ + GLB 読込 + カメラプリセット /
+//! オービット / 自動回転、再生モードの setCamera 反映）。
+
+mod glb;
+mod math3d;
+mod render3d;
+mod sample_glb;
 
 use eframe::egui;
 use egui::{Color32, FontId, Pos2, Rect, Rounding, Stroke, Vec2};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokage_core::{
-    edit, validate_doc, Action, AssetBlobs, Frame, History, Level, Node, ProjectDoc,
+    edit, validate_doc, Action, AssetBlobs, Frame, History, Level, Node, ProjectDoc, View3DNode,
 };
 
 const SAMPLE_JSON: &str = include_str!("../../tokage-core/tests/fixtures/sample-project.json");
@@ -19,6 +27,7 @@ const MIN_NODE_SIZE: f64 = 10.0;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1120.0, 760.0])
             .with_title("tokagetype (native)"),
@@ -106,6 +115,26 @@ struct DragState {
     handle: Option<Handle>,
     start_pointer: Pos2, // 文書座標
     start_rect: RectF,
+    /// 3D 操作モード中の view3d ドラッグ（文書は変更せず視点だけ回す）
+    orbit: bool,
+}
+
+/// view3d ノードごとのオービット状態（編集モード）。
+#[derive(Clone, Copy)]
+struct OrbitState {
+    yaw: f32,
+    pitch: f32,
+    dist: f32,
+}
+
+impl Default for OrbitState {
+    fn default() -> Self {
+        OrbitState {
+            yaw: 0.0,
+            pitch: 0.0,
+            dist: 1.0,
+        }
+    }
 }
 
 struct TokageApp {
@@ -121,6 +150,18 @@ struct TokageApp {
     mode: Mode,
     play: Option<PlayState>,
     drag: Option<DragState>,
+    /// アセット ID → (モデルキャッシュキー, 実体バイト)（3D 描画用）
+    asset_arcs: HashMap<String, (String, Arc<Vec<u8>>)>,
+    /// 3D 読込エラー（モデルキャッシュキー → 理由）
+    render_errors: render3d::RenderErrors,
+    /// wgpu サーフェス形式（初回フレームで取得）
+    surface_format: Option<wgpu::TextureFormat>,
+    /// 3D 操作（オービット）を有効にした view3d ノード ID
+    orbit_node: Option<String>,
+    /// ノードごとのオービット状態
+    orbits: HashMap<String, OrbitState>,
+    /// 自動回転の累積角（ノード ID → ラジアン）
+    spin: HashMap<String, f32>,
     /// 連続編集（ドラッグ/入力）の開始時スナップショット。終了時に History::record する。
     edit_base: Option<ProjectDoc>,
     status: String,
@@ -142,9 +183,17 @@ impl Default for TokageApp {
             mode: Mode::Edit,
             play: None,
             drag: None,
+            asset_arcs: HashMap::new(),
+            render_errors: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+            surface_format: None,
+            orbit_node: None,
+            orbits: HashMap::new(),
+            spin: HashMap::new(),
             edit_base: None,
             status: String::new(),
         };
+        app.fill_sample_assets();
+        app.refresh_asset_arcs();
         if let Some(path) = std::env::args().nth(1) {
             app.open_path(&PathBuf::from(&path));
             if app.current_path.is_none() && app.source_label.is_empty() {
@@ -263,6 +312,7 @@ impl TokageApp {
     // ---- 開く / 保存 ----
 
     fn load_doc(&mut self, doc: ProjectDoc, assets: AssetBlobs, label: String, path: Option<PathBuf>) {
+        let path_for_assets = path.clone();
         self.history.reset(doc.clone());
         self.assets = assets;
         self.saved_snapshot = doc;
@@ -279,7 +329,111 @@ impl TokageApp {
         self.edit_base = None;
         self.mode = Mode::Edit;
         self.play = None;
+        self.orbit_node = None;
+        self.orbits.clear();
+        self.spin.clear();
+        // JSON を開いた場合は同フォルダの外部 GLB を探す（SPEC「Native 版アセット解決」）
+        if let Some(p) = &path_for_assets {
+            let is_tokage = p
+                .extension()
+                .map(|e| e.eq_ignore_ascii_case("tokage"))
+                .unwrap_or(false);
+            if !is_tokage {
+                self.load_sibling_assets(p);
+            }
+        }
+        self.fill_sample_assets();
+        self.refresh_asset_arcs();
         self.refresh_validation_status();
+    }
+
+    /// JSON と同じフォルダにある外部 GLB をアセット実体として取り込む。
+    /// 探索順: `assets/<assetId>.glb` → `<アセット名>`（.tokage の展開形と同じ規則）。
+    fn load_sibling_assets(&mut self, json_path: &Path) {
+        let Some(dir) = json_path.parent() else {
+            return;
+        };
+        for asset in self.doc().assets.clone() {
+            if self.assets.contains_key(&asset.id) {
+                continue;
+            }
+            let candidates = [
+                dir.join("assets").join(format!("{}.glb", asset.id)),
+                dir.join(&asset.name),
+            ];
+            for cand in candidates {
+                if let Ok(bytes) = std::fs::read(&cand) {
+                    self.assets.insert(asset.id.clone(), bytes);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// 同梱サンプル用 GLB が不足していれば手続き生成で補完する。
+    fn fill_sample_assets(&mut self) {
+        let missing: Vec<String> = self
+            .doc()
+            .assets
+            .iter()
+            .filter(|a| a.name == "sample-phone.glb" && !self.assets.contains_key(&a.id))
+            .map(|a| a.id.clone())
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let bytes = sample_glb::build_sample_phone_glb();
+        for id in missing {
+            self.assets.insert(id, bytes.clone());
+        }
+    }
+
+    /// 3D 描画用にアセット実体を Arc 化し、内容ハッシュつきキャッシュキーを作る。
+    fn refresh_asset_arcs(&mut self) {
+        self.asset_arcs = self
+            .assets
+            .iter()
+            .map(|(id, bytes)| {
+                let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                for b in bytes {
+                    h ^= u64::from(*b);
+                    h = h.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                (
+                    id.clone(),
+                    (format!("{id}:{h:016x}"), Arc::new(bytes.clone())),
+                )
+            })
+            .collect();
+    }
+
+    /// view3d ノードの有効カメラ（再生モードでは setCamera の上書きを優先）。
+    fn view3d_camera(&self, n: &View3DNode) -> (math3d::Vec3, math3d::Vec3) {
+        let cam_id = if self.mode == Mode::Play {
+            self.play
+                .as_ref()
+                .and_then(|p| p.camera_override.get(&n.base.id))
+                .cloned()
+                .unwrap_or_else(|| n.active_camera_id.clone())
+        } else {
+            n.active_camera_id.clone()
+        };
+        let cam = n
+            .cameras
+            .iter()
+            .find(|c| c.id == cam_id)
+            .or_else(|| n.cameras.first());
+        match cam {
+            Some(c) => (
+                [
+                    c.position[0] as f32,
+                    c.position[1] as f32,
+                    c.position[2] as f32,
+                ],
+                [c.target[0] as f32, c.target[1] as f32, c.target[2] as f32],
+            ),
+            None => ([2.6, 1.8, 3.2], [0.0, 0.8, 0.0]),
+        }
     }
 
     fn open_sample(&mut self) {
@@ -507,7 +661,11 @@ fn format_color(c: Color32) -> String {
 }
 
 impl eframe::App for TokageApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // 3D 描画用に wgpu サーフェス形式を一度だけ取得する
+        if self.surface_format.is_none() {
+            self.surface_format = frame.wgpu_render_state().map(|s| s.target_format);
+        }
         // 連続編集の終了検知: ポインタを離し、入力欄にもフォーカスが無い時点で確定する
         if self.edit_base.is_some()
             && !ctx.input(|i| i.pointer.any_down())
@@ -1133,6 +1291,13 @@ impl TokageApp {
                 if ui.checkbox(&mut auto, "自動回転").changed() {
                     n.auto_rotate = Some(auto);
                 }
+                let mut orbit_on = self.orbit_node.as_deref() == Some(nid.as_str());
+                if ui
+                    .checkbox(&mut orbit_on, "3D操作（ドラッグで回転 / ホイールでズーム）")
+                    .changed()
+                {
+                    self.orbit_node = if orbit_on { Some(nid.clone()) } else { None };
+                }
                 ui.label("カメラプリセット:");
                 for c in &n.cameras {
                     ui.monospace(format!(
@@ -1389,6 +1554,7 @@ impl TokageApp {
                                         w: b.width,
                                         h: b.height,
                                     },
+                                    orbit: false,
                                 });
                                 self.begin_edit();
                                 started = true;
@@ -1399,6 +1565,9 @@ impl TokageApp {
                         if let Some(node) = hit_node(&frame, dp, true) {
                             let b = node.base();
                             self.selected_node = Some(b.id.clone());
+                            // 3D 操作モード中の view3d は移動ではなくオービットにする
+                            let orbit = matches!(node, Node::View3d(_))
+                                && self.orbit_node.as_deref() == Some(b.id.as_str());
                             self.drag = Some(DragState {
                                 node_id: b.id.clone(),
                                 handle: None,
@@ -1409,14 +1578,27 @@ impl TokageApp {
                                     w: b.width,
                                     h: b.height,
                                 },
+                                orbit,
                             });
-                            self.begin_edit();
+                            if !orbit {
+                                self.begin_edit();
+                            }
                         }
                     }
                 }
             }
             if resp.dragged() {
-                if let (Some(d), Some(p)) = (&self.drag, pointer) {
+                let orbit_drag = self
+                    .drag
+                    .as_ref()
+                    .filter(|d| d.orbit)
+                    .map(|d| d.node_id.clone());
+                if let Some(nid) = orbit_drag {
+                    let delta = resp.drag_delta();
+                    let st = self.orbits.entry(nid).or_default();
+                    st.yaw -= delta.x * 0.008;
+                    st.pitch = (st.pitch - delta.y * 0.008).clamp(-1.35, 1.35);
+                } else if let (Some(d), Some(p)) = (&self.drag, pointer) {
                     let dp = to_doc(p);
                     let dx = (dp.x - d.start_pointer.x) as f64;
                     let dy = (dp.y - d.start_pointer.y) as f64;
@@ -1469,6 +1651,23 @@ impl TokageApp {
                     if let Some(actions) = node.base().actions.clone() {
                         if !actions.is_empty() {
                             self.run_actions(&actions);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3D 操作モード中の view3d 上でのホイールズーム
+        if self.mode == Mode::Edit {
+            if let (Some(oid), Some(p)) = (self.orbit_node.clone(), pointer) {
+                if let Some(node) = frame.nodes.iter().find(|n| n.base().id == oid) {
+                    let b = node.base();
+                    let r = to_rect(b.x, b.y, b.width, b.height);
+                    if r.contains(p) {
+                        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                        if scroll.abs() > 0.01 {
+                            let st = self.orbits.entry(oid).or_default();
+                            st.dist = (st.dist * (1.0 - scroll * 0.002)).clamp(0.3, 3.0);
                         }
                     }
                 }
@@ -1530,34 +1729,101 @@ impl TokageApp {
                 }
                 Node::View3d(n) => {
                     painter.rect_filled(r, Rounding::ZERO, Color32::from_rgb(0xdd, 0xe1, 0xe6));
+                    // 実描画できる場合は wgpu コールバックを差し込み、
+                    // できない場合は理由つきプレースホルダにする
+                    let mut label: Option<String> = None;
+                    match &n.asset_id {
+                        None => {
+                            label = Some(format!("3D VIEW\n{}\nGLB 未設定", base.name));
+                        }
+                        Some(asset_id) => match self.asset_arcs.get(asset_id) {
+                            None => {
+                                label = Some(format!(
+                                    "3D VIEW\n{}\nアセット実体なし",
+                                    base.name
+                                ));
+                            }
+                            Some((model_key, bytes)) => {
+                                let load_err = self.render_errors.lock().ok().and_then(|m| {
+                                    m.get(model_key).cloned()
+                                });
+                                if let Some(e) = load_err {
+                                    label = Some(format!(
+                                        "3D VIEW\n{}\n読み込み失敗: {}",
+                                        base.name, e
+                                    ));
+                                } else if let Some(surface_format) = self.surface_format {
+                                    let (eye0, target) = self.view3d_camera(n);
+                                    let mut yaw = 0.0f32;
+                                    let mut pitch = 0.0f32;
+                                    let mut dist = 1.0f32;
+                                    if n.auto_rotate.unwrap_or(false) {
+                                        let dt = ui.input(|i| i.unstable_dt).min(0.1);
+                                        let e =
+                                            self.spin.entry(base.id.clone()).or_insert(0.0);
+                                        *e += dt * 0.6;
+                                        yaw += *e;
+                                        ui.ctx().request_repaint();
+                                    } else if let Some(s) = self.spin.get(&base.id) {
+                                        yaw += *s;
+                                    }
+                                    if self.mode == Mode::Edit {
+                                        if let Some(o) = self.orbits.get(&base.id) {
+                                            yaw += o.yaw;
+                                            pitch += o.pitch;
+                                            dist = o.dist;
+                                        }
+                                    }
+                                    let eye =
+                                        math3d::apply_orbit(target, eye0, yaw, pitch, dist);
+                                    let aspect = (r.width() / r.height().max(1.0)).max(0.05);
+                                    let mvp = math3d::perspective(
+                                        40f32.to_radians(),
+                                        aspect,
+                                        0.01,
+                                        100.0,
+                                    )
+                                    .mul(&math3d::look_at(eye, target, [0.0, 1.0, 0.0]));
+                                    let ppp = ui.ctx().pixels_per_point();
+                                    painter.add(egui_wgpu::Callback::new_paint_callback(
+                                        r,
+                                        render3d::View3dCallback {
+                                            target_key: base.id.clone(),
+                                            model_key: model_key.clone(),
+                                            bytes: bytes.clone(),
+                                            mvp,
+                                            size_px: [
+                                                (r.width() * ppp).round() as u32,
+                                                (r.height() * ppp).round() as u32,
+                                            ],
+                                            surface_format,
+                                            errors: self.render_errors.clone(),
+                                        },
+                                    ));
+                                } else {
+                                    label = Some(format!("3D VIEW\n{}", base.name));
+                                }
+                            }
+                        },
+                    }
                     painter.rect_stroke(
                         r,
                         Rounding::ZERO,
                         Stroke::new(1.0_f32, Color32::from_gray(120)),
                     );
-                    let cam_id = if self.mode == Mode::Play {
-                        self.play
-                            .as_ref()
-                            .and_then(|p| p.camera_override.get(&base.id))
-                            .map(|s| s.as_str())
-                            .unwrap_or(n.active_camera_id.as_str())
-                    } else {
-                        n.active_camera_id.as_str()
-                    };
-                    let cam = n
-                        .cameras
-                        .iter()
-                        .find(|c| c.id == cam_id)
-                        .map(|c| c.name.as_str())
-                        .unwrap_or("-");
-                    let label = format!("3D VIEW\n{}\ncamera: {}", base.name, cam);
-                    let galley = painter.layout(
-                        label,
-                        FontId::proportional(13.0 * scale.max(0.6)),
-                        Color32::from_rgb(0x3a, 0x3b, 0x42),
-                        r.width(),
-                    );
-                    painter.galley(r.center() - galley.size() / 2.0, galley, Color32::from_gray(60));
+                    if let Some(label) = label {
+                        let galley = painter.layout(
+                            label,
+                            FontId::proportional(13.0 * scale.max(0.6)),
+                            Color32::from_rgb(0x3a, 0x3b, 0x42),
+                            r.width(),
+                        );
+                        painter.galley(
+                            r.center() - galley.size() / 2.0,
+                            galley,
+                            Color32::from_gray(60),
+                        );
+                    }
                 }
             }
             if self.mode == Mode::Edit

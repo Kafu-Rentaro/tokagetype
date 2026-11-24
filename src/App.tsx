@@ -6,14 +6,15 @@ import PropertyPanel from './components/PropertyPanel';
 import Toolbar, { MobileToolBar } from './components/Toolbar';
 import SculptView from './sculpt/SculptView';
 import { removeNodeFromFrame } from './model/mutate';
-import { buildSampleProject } from './sample';
-import { listProjects, loadProject, saveAssetBlob, saveProject } from './storage/db';
+import { buildSampleProject, ensureSampleAssets, SAMPLE_PROJECT_NAME } from './sample';
+import { listAssetBlobIds, listProjects, loadProject, saveAssetBlob, saveProject } from './storage/db';
 import { useEditorStore } from './store/editorStore';
 import { useUiStore } from './store/uiStore';
 import { IconX } from './ui/icons';
 import type { View3DNode } from './model/types';
 
 const LAST_PROJECT_KEY = 'tokagetype:lastProjectId';
+const SAMPLE_PROJECT_KEY = 'tokagetype:sampleProjectId';
 let bootstrapStarted = false;
 
 /** スマホ UI 用ボトムシート（パネルを下から引き出す） */
@@ -101,13 +102,38 @@ export default function App() {
         const projects = await listProjects();
         if (projects.length === 0) {
           const sample = await buildSampleProject();
-          await saveProject(sample.doc);
+          // Blob を先に保存し、文書は最後に保存する。
+          // 逆順だと途中で閉じた場合に「文書だけ残って Blob が無い」
+          // 復旧不能な状態になる（実機で確認された不具合の原因）。
           for (const b of sample.blobs) await saveAssetBlob(b.assetId, b.data);
+          await saveProject(sample.doc);
           localStorage.setItem(LAST_PROJECT_KEY, sample.doc.id);
+          localStorage.setItem(SAMPLE_PROJECT_KEY, sample.doc.id);
           if (!cancelled) loadDoc(sample.doc);
         } else {
+          // 起動時アセット欠落チェック: 参照されているのに実体が無いものを洗い出す。
+          // 表示は各 3D ビューのオーバーレイ（実体が見つかりません）が担う。
+          const blobIds = new Set(await listAssetBlobIds());
+          for (const p of projects) {
+            const missing = p.assets.filter((a) => !blobIds.has(a.id));
+            if (missing.length > 0) {
+              console.warn(
+                `アセット実体が見つかりません: ${p.name} / ${missing.map((a) => a.name).join(', ')}`,
+              );
+            }
+          }
           const lastId = localStorage.getItem(LAST_PROJECT_KEY);
-          const target = (lastId && (await loadProject(lastId))) || projects[0];
+          let target = (lastId && (await loadProject(lastId))) || projects[0];
+          // サンプルは自己修復する: Blob 欠落 / 割当外れを再生成で直す。
+          const sampleId = localStorage.getItem(SAMPLE_PROJECT_KEY);
+          if (target.id === sampleId || target.name === SAMPLE_PROJECT_NAME) {
+            const repaired = await ensureSampleAssets(target);
+            if (repaired) {
+              await saveProject(repaired);
+              localStorage.setItem(SAMPLE_PROJECT_KEY, repaired.id);
+              target = repaired;
+            }
+          }
           if (!cancelled) loadDoc(target);
         }
       } catch (e) {

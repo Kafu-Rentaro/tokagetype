@@ -2,6 +2,10 @@ import { newId } from './model/factory';
 import type { ButtonNode, Frame, ProjectDoc, TextNode, View3DNode } from './model/types';
 import { backCamera, frontCamera } from './model/factory';
 import { buildSamplePhoneGLB } from './three/gltfUtils';
+import { listAssetBlobIds, saveAssetBlob } from './storage/db';
+
+export const SAMPLE_PROJECT_NAME = 'サンプル: スマホ商品紹介';
+export const SAMPLE_ASSET_NAME = 'sample-phone.glb';
 
 export interface SampleBundle {
   doc: ProjectDoc;
@@ -121,11 +125,57 @@ export async function buildSampleProject(): Promise<SampleBundle> {
   const doc: ProjectDoc = {
     version: 1,
     id: newId('proj'),
-    name: 'サンプル: スマホ商品紹介',
+    name: SAMPLE_PROJECT_NAME,
     frames: [homeFrame, detailFrame],
-    assets: [{ id: assetId, name: 'sample-phone.glb', kind: 'glb' }],
+    assets: [{ id: assetId, name: SAMPLE_ASSET_NAME, kind: 'glb' }],
     startFrameId: homeFrame.id,
   };
 
   return { doc, blobs: [{ assetId, data: phoneGLB }] };
+}
+
+/**
+ * サンプルプロジェクトの自己修復。
+ *
+ * 初回投入時に「文書だけ保存されて Blob が無い」状態で中断されると、
+ * 次回以降はプロジェクトが存在するため再投入されず、3D ビューが
+ * プレースホルダのまま固定されてしまう（実機で確認された不具合）。
+ * 起動時にサンプルの view3d ノードを点検し、参照先 Blob が欠けている /
+ * 割当が外れている場合はサンプル GLB を再生成して復旧する。
+ *
+ * ユーザーが自分の GLB に差し替えたノード（参照先 Blob が存在する）は触らない。
+ * 変更があった場合は修復済み doc を返し、無ければ null を返す。
+ */
+export async function ensureSampleAssets(doc: ProjectDoc): Promise<ProjectDoc | null> {
+  const blobIds = new Set(await listAssetBlobIds());
+  const next: ProjectDoc = JSON.parse(JSON.stringify(doc)) as ProjectDoc;
+  let changed = false;
+  let generated: ArrayBuffer | null = null;
+
+  for (const frame of next.frames) {
+    for (const node of frame.nodes) {
+      if (node.type !== 'view3d') continue;
+      const view = node as View3DNode;
+      if (view.assetId && blobIds.has(view.assetId)) continue; // 正常（差し替え含む）
+
+      // サンプル付属アセットを探す。無ければ作る。
+      let entry = next.assets.find((a) => a.name === SAMPLE_ASSET_NAME);
+      if (!entry) {
+        entry = { id: newId('asset'), name: SAMPLE_ASSET_NAME, kind: 'glb' };
+        next.assets.push(entry);
+        changed = true;
+      }
+      // Blob が欠けていれば再生成して保存する。
+      if (!blobIds.has(entry.id)) {
+        if (!generated) generated = await buildSamplePhoneGLB();
+        await saveAssetBlob(entry.id, generated);
+        blobIds.add(entry.id);
+      }
+      if (view.assetId !== entry.id) {
+        view.assetId = entry.id;
+        changed = true;
+      }
+    }
+  }
+  return changed ? next : null;
 }

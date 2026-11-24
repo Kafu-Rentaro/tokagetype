@@ -48,6 +48,12 @@ export async function loadAssetBlob(assetId: string): Promise<ArrayBuffer | unde
   return (await db.get('assetBlobs', assetId)) as ArrayBuffer | undefined;
 }
 
+/** 保存済みアセット実体の ID 一覧（起動時の欠落チェック用） */
+export async function listAssetBlobIds(): Promise<string[]> {
+  const db = await getDB();
+  return (await db.getAllKeys('assetBlobs')) as string[];
+}
+
 export async function deleteAssetBlob(assetId: string): Promise<void> {
   const db = await getDB();
   await db.delete('assetBlobs', assetId);
